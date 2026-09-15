@@ -1,0 +1,22 @@
+# The resident delivery program. Install on the server that is logged in to onchainos as the ASP:
+#   sudo cp deploy/okx-smart-money-agent.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now okx-smart-money-agent
+# Change User and WorkingDirectory to match the server. The user must be the one that ran `onchainos` login,
+# because the CLI keeps its session in that user's home directory.
+[Unit]
+Description=Datadash Smart Money signal delivery for OKX.AI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=datadash
+WorkingDirectory=/home/datadash/okx-smart-money-agent
+# The onchainos installer puts the CLI in ~/.local/bin, which systemd does not have on PATH.
+Environment=PATH=/home/datadash/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env node --env-file=.env src/cli.ts run
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
