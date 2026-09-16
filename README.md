@@ -1,6 +1,8 @@
-# Datadash Smart Money on OKX.AI
+# Polydash on OKX.AI
 
 **Follow Polymarket's best traders from any OKX agent.**
+
+Polydash is built by Datadash, on Datadash's Polymarket data.
 
 Datadash tracks every Polymarket wallet. This agent watches the 500 most profitable ones and sends a signal
 when one of them makes an unusually big bet. On OKX.AI it is a subscription service: a monthly fee with a
@@ -106,7 +108,7 @@ State (signals seen, the outbox, what each subscriber received) lives in `data/s
 
 ## Decisions for the team
 
-- **Price.** `listing/services.json` says 20 USDT a month with a 3-day trial. Change it before registering.
+- **Price.** 5 USDT a month with a 3-day free trial. OKX blocks a price of 0 on subscriptions. Change it with `onchainos agent update`.
 - **Seller identity email.** Use a shared company inbox: review results and the payout wallet are tied to it.
 
 ## Layout

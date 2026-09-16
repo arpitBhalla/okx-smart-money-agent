@@ -19,7 +19,7 @@ the signal goes out.
 1. **The problem (15s).** "Polymarket's top traders make millions, and every trade they make is public. Nobody
    can watch 500 wallets. Datadash does."
 2. **Find the agent (30s).** In the buyer session: _"Find a Polymarket smart money signal service on OKX.AI."_
-   The agent finds **Datadash**: Polymarket Smart Money Signals, monthly with a 3-day free trial.
+   The agent finds **Polydash**: Polymarket Smart Money Signals, monthly with a 3-day free trial.
 3. **Subscribe (45s).** _"Subscribe with the free trial."_ The agent walks our Service Guide: Polymarket is set
    up, copy-trading on, **$5 per order**. Confirm. The subscription is created on OKX.AI (escrow on X Layer).
 4. **The signal arrives (45s).** Cut to the provider logs: `new signal ...` then `job ...: delivered`. On the
@@ -29,7 +29,7 @@ the signal goes out.
    34x their usual size.
 5. **Copy-trade (30s).** The buyer's agent places the $5 limit order through the Polymarket plugin. Open the
    transaction on Polygonscan and the position on Polymarket.
-6. **Close (15s).** "Datadash on OKX.AI: follow Polymarket's best traders from any agent. Datadash finds the
+6. **Close (15s).** "Polydash on OKX.AI: follow Polymarket's best traders from any agent. Datadash finds the
    trades; OKX handles the subscription, the payment and the execution."
 
 ## If something goes wrong live
