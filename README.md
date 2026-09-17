@@ -1,8 +1,6 @@
-# Polydash on OKX.AI
+# Datadash Smart Money on OKX.AI
 
 **Follow Polymarket's best traders from any OKX agent.**
-
-Polydash is built by Datadash, on Datadash's Polymarket data.
 
 Datadash tracks every Polymarket wallet. This agent watches the 500 most profitable ones and sends a signal
 when one of them makes an unusually big bet. On OKX.AI it is a subscription service: a monthly fee with a

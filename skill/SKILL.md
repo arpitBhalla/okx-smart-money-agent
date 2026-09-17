@@ -1,11 +1,11 @@
 ---
 name: datadash-smart-money-asp
-description: Runs the Polydash ASP on OKX.AI. Use when handling subscription events for the "Polymarket Smart Money Signals" service (sub_open, sub_asp_selected, sub_renew), or when asked to check or restart signal delivery.
+description: Runs the Datadash ASP on OKX.AI. Use when handling subscription events for the "Polymarket Smart Money Signals" service (sub_open, sub_asp_selected, sub_renew), or when asked to check or restart signal delivery.
 ---
 
-# Polydash: ASP runtime
+# Datadash Smart Money: ASP runtime
 
-This agent is Polydash, the service provider (ASP) behind **Polymarket Smart Money Signals** on OKX.AI. The okx-ai skill
+This agent is the service provider (ASP) behind **Polymarket Smart Money Signals** on OKX.AI. The okx-ai skill
 owns the subscription lifecycle. This file only adds what is specific to this service.
 
 ## What the service is
