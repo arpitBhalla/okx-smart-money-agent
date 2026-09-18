@@ -50,12 +50,30 @@ export type DeliverResult =
 export type Okx = {
   gateCheck(): Promise<{ ready: boolean; detail: Record<string, unknown> }>;
   activeSubscriptions(aspAgentId: string): Promise<string[]>;
+  /**
+   * Subscriptions still waiting for the provider's agent to accept them. Read-only: OKX lets only the ASP's own
+   * agent session accept, so this program only watches, and alerts when one waits too long.
+   */
+  pendingSubscriptions(): Promise<string[]>;
   deliver(
     jobId: string,
     aspAgentId: string,
     text: string,
   ): Promise<DeliverResult>;
 };
+
+/** Job ids from a CLI list, which arrives as a bare array, `{ list }`, or either inside `data`. */
+function jobIds(out: Record<string, unknown>): string[] {
+  const data = out.data as unknown;
+  const list = Array.isArray(data)
+    ? data
+    : ((data as { list?: unknown[] } | undefined)?.list ??
+      (out.list as unknown[] | undefined) ??
+      []);
+  return list
+    .map((item) => String((item as { jobId?: unknown }).jobId ?? ""))
+    .filter(Boolean);
+}
 
 export function createOkx(run: Runner = execRunner): Okx {
   const json = async (args: string[]) => {
@@ -87,13 +105,23 @@ export function createOkx(run: Runner = execRunner): Okx {
         throw new Error(
           `subscribe-active failed: ${JSON.stringify(out.error ?? out)}`,
         );
-      const data = out.data as unknown;
-      const list = Array.isArray(data)
-        ? data
-        : ((data as { list?: unknown[] } | undefined)?.list ?? []);
-      return list
-        .map((item) => String((item as { jobId?: unknown }).jobId ?? ""))
-        .filter(Boolean);
+      return jobIds(out);
+    },
+
+    async pendingSubscriptions() {
+      const out = await json([
+        "agent",
+        "my-subscriptions",
+        "--role",
+        "provider",
+        "--status",
+        "CREATED",
+      ]);
+      if (out.ok === false)
+        throw new Error(
+          `my-subscriptions failed: ${JSON.stringify(out.error ?? out)}`,
+        );
+      return jobIds(out);
     },
 
     async deliver(jobId, aspAgentId, text) {

@@ -46,3 +46,16 @@ test("the explanation names the trader, the size and the market link", () => {
     /polymarket\.com\/event\/what-price-will-ethereum-hit-in-2026\/will-ethereum-dip/,
   );
 });
+
+test("the explanation says what a win pays and how recently a trader traded", () => {
+  const text = explainSignal(signal(), new Date("2026-09-23T10:00:00Z"));
+  assert.match(text, /Last traded 2d ago\./);
+  assert.match(text, /Now 0\.42; pays \+133% if right\./);
+});
+
+test("the explanation shows the smart-money consensus behind the signal", () => {
+  const text = explainSignal(
+    signal({ consensus: { share: 0.81, wallets: 15, atRiskUsd: 243_000 } }),
+  );
+  assert.match(text, /Top-500 money on this side: 81% across 15 wallets \(\$243\.0K\)\./);
+});

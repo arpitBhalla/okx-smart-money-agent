@@ -91,3 +91,17 @@ test("gate-check is ready only when data.ready is true", async () => {
     false,
   );
 });
+
+test("pending subscriptions are read-only and accept list or data.list", async () => {
+  let args: string[] = [];
+  const okx = createOkx(async (a) => {
+    args = a;
+    return { stdout: '{"list":[{"jobId":"j1"},{"jobId":"j2"}]}', stderr: "", code: 0 };
+  });
+  assert.deepEqual(await okx.pendingSubscriptions(), ["j1", "j2"]);
+  assert.deepEqual(args, ["agent", "my-subscriptions", "--role", "provider", "--status", "CREATED"]);
+  assert.deepEqual(
+    await createOkx(replying('{"ok":true,"data":{"list":[{"jobId":"j3"}]}}')).pendingSubscriptions(),
+    ["j3"],
+  );
+});

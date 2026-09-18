@@ -8,6 +8,9 @@ import { signal } from "./fixtures.ts";
 const opts = (over: Partial<RoundOptions> = {}): RoundOptions => ({
   aspAgentId: "42",
   maxSignalsPerRound: 3,
+  // The caps have their own tests; elsewhere the fixtures share one event and one trader.
+  maxSignalsPerEvent: 99,
+  maxSignalsPerTrader: 99,
   signalValidHours: 2,
   dryRun: false,
   now: new Date("2026-09-22T12:00:00Z"),
@@ -25,6 +28,7 @@ function fakeOkx(
   const okx: Okx = {
     gateCheck: async () => ({ ready: true, detail: {} }),
     activeSubscriptions: async () => jobs,
+    pendingSubscriptions: async () => [],
     deliver: async (jobId, _agent, text) => {
       sent.push({ jobId, text });
       return answer(jobId, text);
@@ -131,4 +135,47 @@ test("a dry run sends nothing", async () => {
   const { okx, sent } = fakeOkx(["job-a"]);
   await runRound(state, [signal()], okx, opts({ dryRun: true }));
   assert.equal(sent.length, 0);
+});
+
+const trader = (wallet: string) => ({ ...signal().traders[0], wallet });
+
+test("one live signal per event: a second signal on the same event waits for a later round", async () => {
+  const state = emptyState();
+  const capped = opts({ maxSignalsPerEvent: 1, maxSignalsPerTrader: 1 });
+  const first = signal({ id: "1", eventId: 100, traders: [trader("0xa")] });
+  const sameEvent = signal({ id: "2", eventId: 100, traders: [trader("0xb")] });
+  const other = signal({ id: "3", eventId: 200, traders: [trader("0xc")] });
+
+  const round1 = await runRound(state, [first, sameEvent, other], fakeOkx([]).okx, capped);
+  assert.deepEqual(round1.newSignals.map((s) => s.id), ["1", "3"]);
+  assert.equal(state.seen["2"], undefined, "held back, not marked seen");
+
+  // Once the first signal's validity window has passed, the held-back one goes out.
+  const later = opts({ ...capped, now: new Date("2026-09-22T14:30:00Z") });
+  const round2 = await runRound(state, [first, sameEvent, other], fakeOkx([]).okx, later);
+  assert.deepEqual(round2.newSignals.map((s) => s.id), ["2"]);
+});
+
+test("one live signal per top trader, counting every trader in a signal", async () => {
+  const state = emptyState();
+  const capped = opts({ maxSignalsPerEvent: 9, maxSignalsPerTrader: 1 });
+  const round = await runRound(
+    state,
+    [
+      signal({ id: "1", eventId: 1, traders: [trader("0xa"), trader("0xb")] }),
+      signal({ id: "2", eventId: 2, traders: [trader("0xb")] }),
+      signal({ id: "3", eventId: 3, traders: [trader("0xc")] }),
+    ],
+    fakeOkx([]).okx,
+    capped,
+  );
+  assert.deepEqual(round.newSignals.map((s) => s.id), ["1", "3"]);
+});
+
+test("every admitted signal is kept in the history for the track record", async () => {
+  const state = emptyState();
+  await runRound(state, [signal()], fakeOkx([]).okx, opts());
+  assert.equal(state.history.length, 1);
+  assert.equal(state.history[0].orderPrice, 0.43);
+  assert.match(state.history[0].url, /^https:\/\/polymarket\.com\/event\//);
 });

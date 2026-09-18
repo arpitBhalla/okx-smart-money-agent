@@ -12,6 +12,8 @@
     "baseline": "node --env-file-if-exists=.env src/cli.ts baseline",
     "round": "node --env-file-if-exists=.env src/cli.ts round",
     "start": "node --env-file-if-exists=.env src/cli.ts run",
+    "track-record": "node --env-file-if-exists=.env src/cli.ts track-record",
+    "backtest": "node --env-file-if-exists=.env src/cli.ts backtest",
     "test": "node --test test/*.test.ts",
     "check:types": "tsc --noEmit"
   },

@@ -14,13 +14,18 @@ export const thresholds: Thresholds = {
   minPrice: 0.1,
   maxPrice: 0.9,
   maxChase: 0.03,
+  maxDrop: 0.1,
   maxDaysLeft: 120,
+  maxPositionAgeDays: 7,
+  minConsensusShare: 0.6,
+  minConsensusWallets: 3,
 };
 
 export const row = (over: Partial<PositionRow> = {}): PositionRow => ({
   userId: "0xaaa0000000000000000000000000000000000001",
   positionId: 1,
   marketId: 10,
+  eventId: 100,
   avgEntryPrice: 0.41,
   pNow: 0.42,
   tradeSize: 20_000,
@@ -52,6 +57,7 @@ export const trader = (over: Partial<TraderInfo> = {}): TraderInfo => ({
 export const signal = (over: Partial<Signal> = {}): Signal => ({
   id: "1",
   marketId: 10,
+  eventId: 100,
   question: "Will Ethereum dip to $2,250 by December 31, 2026?",
   slug: "will-ethereum-dip-to-2250-by-december-31-2026",
   eventSlug: "what-price-will-ethereum-hit-in-2026",
@@ -71,6 +77,7 @@ export const signal = (over: Partial<Signal> = {}): Signal => ({
       tradeUsd: 20_000,
       relSize: 10,
       score: 100,
+      lastTradedAt: "2026-09-21 10:00:00",
     },
   ],
   ...over,

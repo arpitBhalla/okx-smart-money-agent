@@ -1,4 +1,4 @@
-import { formatSignal } from "./format.ts";
+import { formatSignal, marketUrl } from "./format.ts";
 import type { Okx } from "./onchainos.ts";
 import type { Signal } from "./signals.ts";
 import type { State } from "./state.ts";
@@ -6,6 +6,8 @@ import type { State } from "./state.ts";
 export type RoundOptions = {
   aspAgentId: string;
   maxSignalsPerRound: number;
+  maxSignalsPerEvent: number;
+  maxSignalsPerTrader: number;
   signalValidHours: number;
   dryRun: boolean;
   now: Date;
@@ -22,7 +24,10 @@ export type RoundSummary = {
 
 /**
  * Records the signals that qualify for the first time and drops outbox items past their validity window. At
- * most `maxSignalsPerRound` new signals per round, strongest first, so subscribers are never flooded.
+ * most `maxSignalsPerRound` new signals per round, strongest first, so subscribers are never flooded. While a
+ * signal is live, the same event and the same top traders get no more than `maxSignalsPerEvent` and
+ * `maxSignalsPerTrader` signals: related bets would make a copier take one bet several times. A signal held
+ * back is not marked seen, so it goes out in a later round if it still qualifies then.
  */
 export function admitSignals(
   state: State,
@@ -34,15 +39,43 @@ export function admitSignals(
     (item) => new Date(item.createdAt).getTime() > cutoff,
   );
 
-  const fresh = signals
-    .filter((signal) => !state.seen[signal.id])
-    .slice(0, opts.maxSignalsPerRound);
+  const perEvent = new Map<number, number>();
+  const perTrader = new Map<string, number>();
+  const count = (signal: Signal) => {
+    // Outbox items saved before eventId existed simply don't count toward the event cap.
+    if (signal.eventId !== undefined)
+      perEvent.set(signal.eventId, (perEvent.get(signal.eventId) ?? 0) + 1);
+    for (const trader of signal.traders)
+      perTrader.set(trader.wallet, (perTrader.get(trader.wallet) ?? 0) + 1);
+  };
+  const withinCaps = (signal: Signal) =>
+    (perEvent.get(signal.eventId) ?? 0) < opts.maxSignalsPerEvent &&
+    signal.traders.every(
+      (trader) => (perTrader.get(trader.wallet) ?? 0) < opts.maxSignalsPerTrader,
+    );
+  for (const item of state.outbox) count(item.signal);
+
+  const fresh: Signal[] = [];
+  for (const signal of signals) {
+    if (fresh.length >= opts.maxSignalsPerRound) break;
+    if (state.seen[signal.id] || !withinCaps(signal)) continue;
+    fresh.push(signal);
+    count(signal);
+  }
+
   const createdAt = opts.now.toISOString();
   for (const signal of fresh) {
+    const text = formatSignal(signal, opts.signalValidHours);
     state.seen[signal.id] = createdAt;
-    state.outbox.push({
-      signal,
-      text: formatSignal(signal, opts.signalValidHours),
+    state.outbox.push({ signal, text, createdAt });
+    state.history.push({
+      id: signal.id,
+      question: signal.question,
+      outcome: signal.outcome,
+      orderPrice: signal.orderPrice,
+      settlement: signal.settlement,
+      url: marketUrl(signal),
+      text,
       createdAt,
     });
   }

@@ -1,10 +1,19 @@
+import { backtestCommand } from "./backtest.ts";
 import { loadConfig, requireEnv, type Config } from "./config.ts";
 import { connectDatadash } from "./datadash.ts";
 import { runRound } from "./dispatch.ts";
 import { explainSignal, formatSignal } from "./format.ts";
+import {
+  loadHealth,
+  recordPending,
+  recordRound,
+  saveHealth,
+  sendAlert,
+} from "./health.ts";
 import { createOkx } from "./onchainos.ts";
 import { fetchSignals } from "./signals.ts";
 import { loadState, saveState } from "./state.ts";
+import { writeTrackRecord } from "./trackRecord.ts";
 
 const log = (line: string) =>
   console.log(`${new Date().toISOString()} ${line}`);
@@ -14,7 +23,9 @@ const USAGE = `Usage: node src/cli.ts <command>
   preview    Print the signals that qualify right now, with the reason each fired. Changes nothing.
   baseline   Mark every signal that qualifies now as already seen, so only positions opened from here on fire.
   round      Run one dispatch round: find new signals and deliver them to every active subscriber.
-  run        Run rounds forever, every SCAN_INTERVAL_MIN minutes. This is the resident delivery program.`;
+  run        Run rounds forever, every SCAN_INTERVAL_MIN minutes. This is the resident delivery program.
+  track-record  Score every signal sent so far against the market, into reports/track-record.md.
+  backtest   Replay the past BACKTEST_DAYS (default 180) of top-trader buys through the signal rules and write reports/backtest.md.`;
 
 async function withSignals<T>(
   config: Config,
@@ -53,7 +64,8 @@ async function baseline(config: Config) {
   });
 }
 
-async function round(config: Config) {
+/** One round. Returns its one-line summary; throws when the round could not run. */
+async function round(config: Config): Promise<string> {
   requireEnv(
     config,
     config.dryRun ? ["datadashApiKey"] : ["datadashApiKey", "aspAgentId"],
@@ -63,6 +75,8 @@ async function round(config: Config) {
     runRound(state, signals, createOkx(), {
       aspAgentId: config.aspAgentId,
       maxSignalsPerRound: config.maxSignalsPerRound,
+      maxSignalsPerEvent: config.maxSignalsPerEvent,
+      maxSignalsPerTrader: config.maxSignalsPerTrader,
       signalValidHours: config.signalValidHours,
       dryRun: config.dryRun,
       now: new Date(),
@@ -71,10 +85,39 @@ async function round(config: Config) {
   );
   // A dry run only looks: it never marks signals as seen.
   if (!config.dryRun) await saveState(config.stateFile, state);
-  log(
+  const line =
     `round done: ${summary.newSignals.length} new, ${summary.activeJobs} active subscription(s), ` +
-      `${summary.delivered} delivered, ${summary.failed} failed`,
-  );
+    `${summary.delivered} delivered, ${summary.failed} failed`;
+  log(line);
+  return line;
+}
+
+/**
+ * After each round: record it in the health file, watch for subscriptions the provider's agent has not accepted,
+ * and send any alert that calls for. Never throws: health checks must not stop delivery.
+ */
+async function afterRound(
+  config: Config,
+  result: { ok: true; summary: string } | { ok: false; error: string },
+) {
+  try {
+    const now = new Date();
+    const health = await loadHealth(config.healthFile);
+    const alerts = recordRound(health, result, now, config.alertAfterFailures);
+    if (!config.dryRun) {
+      try {
+        const pending = await createOkx().pendingSubscriptions();
+        alerts.push(...recordPending(health, pending, now, config.pendingAlertMin));
+      } catch (error) {
+        log(`pending-subscription check failed: ${(error as Error).message}`);
+      }
+    }
+    await saveHealth(config.healthFile, health);
+    for (const alert of alerts)
+      await sendAlert(config.alertWebhookUrl, alert, log);
+  } catch (error) {
+    log(`health update failed: ${(error as Error).message}`);
+  }
 }
 
 async function run(config: Config) {
@@ -99,10 +142,12 @@ async function run(config: Config) {
 
   while (!stopping) {
     try {
-      await round(config);
+      await afterRound(config, { ok: true, summary: await round(config) });
     } catch (error) {
       // One bad round (network, API) must not stop the delivery program.
-      log(`round failed: ${(error as Error).message}`);
+      const message = (error as Error).message;
+      log(`round failed: ${message}`);
+      await afterRound(config, { ok: false, error: message });
     }
     if (stopping) break;
     await new Promise<void>((resolve) => {
@@ -116,11 +161,31 @@ async function run(config: Config) {
   log("stopped");
 }
 
-const commands: Record<string, (config: Config) => Promise<void>> = {
+async function trackRecord(config: Config) {
+  requireEnv(config, ["datadashApiKey"]);
+  const state = await loadState(config.stateFile);
+  const datadash = await connectDatadash(
+    config.datadashMcpUrl,
+    config.datadashApiKey,
+  );
+  try {
+    const record = await writeTrackRecord(datadash, state.history, "reports");
+    log(
+      `track record: ${record.signals.length} signal(s) sent, ${record.resolved} settled, ${record.won} won. ` +
+        "Written to reports/track-record.md",
+    );
+  } finally {
+    await datadash.close();
+  }
+}
+
+const commands: Record<string, (config: Config) => Promise<unknown>> = {
   preview,
   baseline,
   round,
   run,
+  "track-record": trackRecord,
+  backtest: backtestCommand,
 };
 const command = commands[process.argv[2] ?? ""];
 if (!command) {

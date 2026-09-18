@@ -12,7 +12,7 @@ owns the subscription lifecycle. This file only adds what is specific to this se
 
 A schedule-driven signal subscription. Signals are produced and delivered by the resident delivery program in
 this repository (`pnpm start`, run as the `okx-smart-money-agent` systemd unit). It checks Datadash every
-10 minutes and delivers each new signal to every active subscription with `onchainos agent deliver`.
+2 minutes and delivers each new signal to every active subscription with `onchainos agent deliver`.
 
 **Never write or deliver a signal by hand.** Every signal must come from the delivery program, which reads it
 from Datadash's live data.
@@ -26,7 +26,7 @@ Handle every event through `onchainos agent next-action`, as the okx-ai skill de
   subscription names a different service.
 - `sub_asp_selected`: the subscription is now active. There is nothing to generate at this moment. Do not
   invent a deliverable. Check the delivery program is running (below). It sends any signal still inside its
-  validity window within 10 minutes.
+  validity window within 2 minutes.
 - `sub_renew`: claim the previous period's income with `onchainos agent subscribe-asp-claim`.
 
 ## Checking delivery
@@ -34,7 +34,11 @@ Handle every event through `onchainos agent next-action`, as the okx-ai skill de
 ```bash
 systemctl status okx-smart-money-agent      # should be active (running)
 journalctl -u okx-smart-money-agent -n 50   # recent rounds: "round done: N new, M active subscription(s) ..."
+cat data/health.json                        # last round, last success, consecutive failures, pending subscriptions
 ```
+
+The delivery program watches for subscriptions waiting for your acceptance and alerts the owner when one waits
+more than 15 minutes. It never accepts them: accepting is this session's job.
 
 If the unit is not running, restart it with `sudo systemctl restart okx-smart-money-agent` and report what
 the logs said. Do not change thresholds or the listing without the owner's say-so.

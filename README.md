@@ -13,7 +13,7 @@ OKX Dev Day 2026, **Build a Company** track.
 
 ```
 Datadash (every Polymarket wallet, scored)
-        │  every 10 minutes: top-500 traders' new high-conviction positions
+        │  every 2 minutes: top-500 traders' new high-conviction positions
         ▼
 Resident delivery program (this repo, `pnpm start`)
         │  onchainos agent subscribe-active   → who is subscribed right now
@@ -42,18 +42,33 @@ A position qualifies when all of these hold (every threshold can be changed in `
 | Datadash signal score               | 80 or more        | Datadash's 0-100 conviction score                          |
 | Size against the trader's usual bet | 3x or more        | An unusual bet, not routine activity                       |
 | Money behind it                     | $5,000 or more    | Real conviction                                            |
-| Current price                       | 10¢ to 90¢        | Enough upside, and odds that aren't a coin flip on nothing |
-| Price against the trader's entry    | at most 3¢ higher | The signal is still copyable                               |
+| Current price                       | 10¢ to 85¢        | At least +18% if right, and odds that aren't a coin flip on nothing |
+| Price against the trader's entry    | 3¢ higher to 10¢ lower | Still copyable, and the market isn't running against them |
+| Last traded by a top trader         | within 7 days     | News, not an old holding                                   |
+| Smart-money consensus               | 60%+ of top-500 money on the market, 3+ wallets | The wider smart money agrees; a lone whale is not enough |
 | Days until the market ends          | 1 to 120          | Settles in a useful time frame                             |
+
+Two Datadash views work together. The **trigger** is one top trader's unusual bet (`signalScore`): it gives
+the moment, the entry price and the size. The **confirmation** is the smart-money consensus (`globalSmartMoney`,
+evaluated over top-500 wallets only): of all the money those wallets hold on the market, most must be on the same
+side. Consensus alone would repeat the same markets for weeks with no entry price to trade on; one trader alone
+can be wrong or hedged elsewhere.
 
 Several top traders in the same outcome become **one** signal. A market where top traders hold opposite sides is
 skipped, because there is no clear side to follow. Each signal fires once, at most 3 per round, strongest first.
+While a signal is live, its event and its traders get no other signal (`MAX_SIGNALS_PER_EVENT`,
+`MAX_SIGNALS_PER_TRADER`): NO on "Bitcoin reaches $120K" and NO on "Bitcoin reaches $110K" from the same wallet
+are one bet, and a copier should not take it twice. A signal held back waits for a later round.
 
 A signal is one line in OKX.AI's Prediction format, at most 200 characters:
 
 ```
-【Prediction】"Will Bitcoin reach $120,000 by December 31, 2026?" | NO | Limit | Order Price 0.86 | Position 3% | Settlement 2026-12-31 | Valid for 2h
+【Prediction】"Will Bitcoin reach $110,000 by December 31, 2026?" | NO | Limit | Order Price 0.79 | Position 3% | Settlement 2026-12-31 | Valid for 2h
 ```
+
+The line carries no market id, because OKX's format has no field for one. The service guide tells the
+subscriber's agent to match the exact question, outcome and settlement date, and to skip the signal rather than
+guess when the match is not unique.
 
 The limit price is one cent above the current price, but never more than 3 cents above what the top traders
 paid. The position is 3% when the score is 95 or more and either several top traders agree or the bet is 10x
@@ -76,8 +91,33 @@ pnpm test                     # unit tests
 | `pnpm baseline` | Marks everything that qualifies now as seen, so only positions opened from here on fire.         |
 | `pnpm round`    | One round: find new signals, deliver them to every active subscriber. `DRY_RUN=1` sends nothing. |
 | `pnpm start`    | The resident delivery program: a round every `SCAN_INTERVAL_MIN` minutes.                        |
+| `pnpm track-record` | Scores every signal sent so far against the market into `reports/track-record.md`.          |
 
-State (signals seen, the outbox, what each subscriber received) lives in `data/state.json`.
+State (signals seen, the outbox, what each subscriber received, every signal ever sent) lives in
+`data/state.json`. After every round the resident program writes `data/health.json`, and it alerts through
+`ALERT_WEBHOOK_URL` (Slack or Discord) when rounds fail 3 times in a row, when delivery recovers, and when a
+subscription waits more than 15 minutes for the agent session to accept it.
+
+## Backtest
+
+`pnpm backtest` (or `pnpm backtest 90`) asks "what if I had followed every signal?" Datadash's live table only holds
+positions held today, so the backtest replays the activity log instead: every $5k+ buy by a top-500 wallet, run
+through the same rules (size against the trader's usual bet, price band, days to end, one side per market, the
+delivery caps), with the follower buying at the trader's price + 1¢ and $100 per signal. Results go to
+`reports/backtest.md` (and per-signal rows to `reports/backtest.json`, not committed).
+
+Over the last 180 days: 3,782 resolved signals as delivered, 64.9% hit rate at an average entry of 0.62,
++4.4% per signal, +$16,659 on $100 stakes (max drawdown $2,327). The edge is thin and mostly from sports markets
+that settle within hours; signals that took a day or more to settle returned +2.4% ± 2.9%, not distinguishable
+from zero. The report lists the limits: wallet ranks are today's (look-ahead bias), the Datadash score and the
+smart-money consensus can't be rebuilt for the past, and the usual bet size is partly estimated.
+
+## Track record
+
+`pnpm track-record` publishes every signal sent with its result: won or lost once the market settles, marked to
+the current price while it is open. Returns are per dollar at the signal's order price. Run it on a schedule
+and publish `reports/track-record.md` (for example on the Datadash site) so subscribers can check the record
+before they pay.
 
 ## Put it on OKX.AI
 
@@ -101,12 +141,22 @@ State (signals seen, the outbox, what each subscriber received) lives in `data/s
    sudo systemctl daemon-reload && sudo systemctl enable --now okx-smart-money-agent
    ```
 5. **Keep an agent session open** on that server (Claude Code with the okx-ai skill, plus `skill/SKILL.md` from
-   this repo). OKX requires the provider's own agent to accept each new subscription (`sub_open`). The resident
-   program only delivers signals; it never accepts or declines anything.
+   this repo). OKX requires the provider's own agent to accept each new subscription (`sub_open`), and its rules
+   forbid dispatchers from doing it. The resident program only delivers signals and watches: it alerts when a
+   subscription waits too long, which means the session is down.
 
 ## Decisions for the team
 
 - **Price.** 5 USDT a month with a 3-day free trial. OKX blocks a price of 0 on subscriptions. Change it with `onchainos agent update`.
+- **Tiers (proposal, not listed yet).**
+  | Tier     | Price            | What you get                                                                 |
+  | -------- | ---------------- | ---------------------------------------------------------------------------- |
+  | Free     | 0, via A2MCP     | `/smart-money-edge` and `/market-read`: the data, signals delayed an hour     |
+  | Standard | 5 USDT a month   | This service: live signals, copy-trading through the subscriber's own agent  |
+  | Pro      | 25 USDT a month  | 30-second scans, every qualifying signal (no per-round cap), a custom trader list, category filters |
+  Pro is a second service on the same identity, added with `onchainos agent update` once Standard has a track record.
+- **Where this grows.** The same scoring works on every prediction market Datadash indexes, and the Datadash
+  score itself can be licensed to trading desks and other agents as an API.
 - **Seller identity email.** Use a shared company inbox: review results and the payout wallet are tied to it.
 
 ## Layout
@@ -115,9 +165,12 @@ State (signals seen, the outbox, what each subscriber received) lives in `data/s
 src/signals.ts     Datadash query, grouping and ranking of signals
 src/format.ts      The 【Prediction】 line (max 200 characters) and the human-readable reason
 src/dispatch.ts    One round: admit new signals, deliver to each active subscription, retry failures
-src/onchainos.ts   The onchainos CLI calls: gate-check, subscribe-active, deliver
+src/onchainos.ts   The onchainos CLI calls: gate-check, subscribe-active, deliver, pending subscriptions (read-only)
 src/datadash.ts    Datadash MCP client (api.datadash.xyz/mcp, X-Api-Key header)
-src/cli.ts         preview / baseline / round / run
+src/health.ts      data/health.json after each round, and webhook alerts
+src/trackRecord.ts Every signal sent, scored against the market
+src/backtest.ts    Replay of past top-trader buys through the signal rules
+src/cli.ts         preview / baseline / round / run / track-record
 listing/           OKX.AI identity and service listing
 skill/SKILL.md     Instructions for the provider's agent session
 deploy/            systemd unit for the resident program

@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildSignals, settlementDate } from "../src/signals.ts";
+import {
+  applyConsensus,
+  buildSignals,
+  settlementDate,
+  signalQuery,
+  type ConsensusRow,
+} from "../src/signals.ts";
 import { row, thresholds, token, trader } from "./fixtures.ts";
 
 const tokens = (...items: ReturnType<typeof token>[]) =>
@@ -127,4 +133,80 @@ test("settlement is the last Eastern-time trading day, not the UTC close", () =>
   assert.equal(settlementDate("2026-11-01 03:59:00"), "2026-10-31");
   assert.equal(settlementDate(null), null);
   assert.equal(settlementDate("not a date"), null);
+});
+
+test("the query drops positions that fell more than maxDrop below the traders entry", () => {
+  const slips = signalQuery(thresholds).filter.filter(
+    (f) => f.field === "slipAbs",
+  );
+  assert.deepEqual(
+    slips.map((f) => [f.operator, f.value]),
+    [
+      ["lte", 0.03],
+      ["gte", -0.1],
+    ],
+  );
+});
+
+test("an old holding is skipped unless a trader on it traded within maxPositionAgeDays", () => {
+  const now = new Date("2026-09-23T12:00:00Z");
+  const second = "0xbbb0000000000000000000000000000000000002";
+  const rows = [row(), row({ userId: second })];
+  const build = (lastTraded: [string, string][]) =>
+    buildSignals(rows, tokens(token()), traders(trader()), thresholds, {
+      lastTraded: new Map(lastTraded),
+      now,
+    });
+
+  assert.equal(build([]).length, 0, "no trade record: not news");
+  assert.equal(
+    build([[`${row().userId}:1`, "2026-09-10 12:00:00"]]).length,
+    0,
+    "13 days old",
+  );
+  const [signal] = build([
+    [`${row().userId}:1`, "2026-09-10 12:00:00"],
+    [`${second}:1`, "2026-09-21 12:00:00"],
+  ]);
+  assert.ok(signal, "one trader traded it 2 days ago");
+  assert.deepEqual(
+    signal.traders.map((t) => t.lastTradedAt).sort(),
+    ["2026-09-10 12:00:00", "2026-09-21 12:00:00"],
+  );
+});
+
+test("a stale holder on the other side still blocks the market", () => {
+  const now = new Date("2026-09-23T12:00:00Z");
+  const signals = buildSignals(
+    [row(), row({ positionId: 2, userId: "0xbbb" })],
+    tokens(token(), token({ positionId: 2, tokenName: "Yes" })),
+    traders(),
+    thresholds,
+    {
+      lastTraded: new Map([[`${row().userId}:1`, "2026-09-22 12:00:00"]]),
+      now,
+    },
+  );
+  assert.equal(signals.length, 0);
+});
+
+test("a signal needs the top wallets' money to lean its way across enough wallets", () => {
+  const consensus = (over: Partial<ConsensusRow> = {}): ConsensusRow => ({
+    marketId: 10,
+    side: "No",
+    smartMoneyPrice: 0.81,
+    wallets: 15,
+    atRisk: 243_000,
+    ...over,
+  });
+  const [base] = buildSignals([row()], tokens(token()), traders(trader()), thresholds);
+
+  const [kept] = applyConsensus([base], [consensus()], thresholds);
+  assert.deepEqual(kept.consensus, { share: 0.81, wallets: 15, atRiskUsd: 243_000 });
+
+  assert.equal(applyConsensus([base], [consensus({ side: "Yes" })], thresholds).length, 0, "money leans the other way");
+  assert.equal(applyConsensus([base], [consensus({ side: "no" })], thresholds).length, 1, "side names match case-insensitively");
+  assert.equal(applyConsensus([base], [consensus({ smartMoneyPrice: 0.55 })], thresholds).length, 0, "too split");
+  assert.equal(applyConsensus([base], [consensus({ wallets: 2 })], thresholds).length, 0, "a lone whale and a friend");
+  assert.equal(applyConsensus([base], [], thresholds).length, 0, "no consensus row");
 });
