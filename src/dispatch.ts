@@ -82,6 +82,16 @@ export function admitSignals(
   return fresh;
 }
 
+/**
+ * Why a round that ran should still count as a failure, or null. Subscribers were waiting, sends were attempted
+ * and not one got through: delivery is down even though nothing threw.
+ */
+export function deliveryOutage(summary: RoundSummary): string | null {
+  return summary.activeJobs > 0 && summary.delivered === 0 && summary.failed > 0
+    ? `all ${summary.failed} send(s) to ${summary.activeJobs} subscription(s) failed`
+    : null;
+}
+
 /** One dispatch round: admit new signals, then send every outbox item each active subscription has not had yet. */
 export async function runRound(
   state: State,

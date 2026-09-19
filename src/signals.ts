@@ -41,7 +41,7 @@ export type SignalTrader = {
   tradeUsd: number;
   relSize: number;
   score: number;
-  /** When this trader last traded the position, or null when Datadash has no record. */
+  /** When this trader last bought the position, or null when there is no buy in the freshness window. */
   lastTradedAt: string | null;
 };
 
@@ -125,16 +125,38 @@ export function signalQuery(t: Thresholds, limit = 100) {
   };
 }
 
-/** `${wallet}:${positionId}` → when that wallet last traded that position. */
+/** `${wallet}:${positionId}` → when that wallet last bought that position. */
 export type LastTraded = Map<string, string>;
 
 const tradeKey = (userId: string, positionId: number) =>
   `${userId}:${positionId}`;
 
+/** Datadash's page cap. A full page means rows were cut off, so the caller must not trust it as complete. */
+export const PAGE_LIMIT = 1000;
+
+/**
+ * The latest buy per wallet and position, from Datadash `activity` rows. Buys only: a sell also moves a
+ * position's last-trade time, and a trader trimming a bet is not news. Throws rather than returning a map that
+ * would silently fail every signal: on a full page, or when the rows no longer carry the fields we read.
+ */
+export function lastBuys(rows: Record<string, unknown>[]): LastTraded {
+  if (rows.length >= PAGE_LIMIT)
+    throw new Error(`Datadash returned a full page of ${PAGE_LIMIT} buys; freshness would be incomplete`);
+  const last: LastTraded = new Map();
+  for (const row of rows) {
+    const at = String(row.timestamp);
+    if (!row.wallet || Number.isNaN(parseUtc(at).getTime()))
+      throw new Error(`Datadash activity row without wallet or timestamp: ${JSON.stringify(row).slice(0, 200)}`);
+    const key = tradeKey(String(row.wallet), Number(row.positionId));
+    if (!last.has(key) || parseUtc(at) > parseUtc(last.get(key)!)) last.set(key, at);
+  }
+  return last;
+}
+
 /**
  * Groups top-trader positions into one signal per outcome token, ranked by conviction. A market where top
  * traders hold both sides is dropped: there is no clear side to copy. With `activity`, a signal also needs at
- * least one of its traders to have traded the position in the last `maxPositionAgeDays`, so an old holding
+ * least one of its traders to have bought into the position in the last `maxPositionAgeDays`, so an old holding
  * that happens to qualify is not sent as news. Both sides are counted before that check, so a stale holder on
  * the other side still blocks the market.
  */
@@ -279,7 +301,7 @@ export async function fetchSignals(
 
   const positionIds = [...new Set(rows.map((row) => row.positionId))];
   const userIds = [...new Set(rows.map((row) => row.userId))];
-  const [tokenRows, userRows, tradeRows] = await Promise.all([
+  const [tokenRows, userRows, buyRows] = await Promise.all([
     datadash.queryLookup("signalScore", "positionId", {
       filter: [{ field: "positionId", operator: "in", value: positionIds }],
       page: { limit: positionIds.length, offset: 0 },
@@ -288,13 +310,16 @@ export async function fetchSignals(
       filter: [{ field: "userId", operator: "in", value: userIds }],
       page: { limit: userIds.length, offset: 0 },
     }),
-    // The wallets' per-position history, only for its last trade time. Pairs outside `rows` are ignored.
-    datadash.queryTable("userPosition", {
+    // Recent buys only, for freshness. Pairs outside `rows` are ignored.
+    datadash.queryTable("activity", {
+      activities: ["Buy"],
       filter: [
-        { field: "userId", operator: "in", value: userIds },
+        { field: "wallet", operator: "in", value: userIds },
         { field: "positionId", operator: "in", value: positionIds },
+        { field: "timestamp", operator: "last", value: { length: Math.ceil(t.maxPositionAgeDays), unit: "day" } },
       ],
-      page: { limit: 1000, offset: 0 },
+      orderBy: [{ field: "timestamp", direction: "desc" }],
+      page: { limit: PAGE_LIMIT, offset: 0 },
     }),
   ]);
 
@@ -307,14 +332,8 @@ export async function fetchSignals(
   const traders = new Map(
     (userRows as unknown as TraderInfo[]).map((user) => [user.userId, user]),
   );
-  const lastTraded: LastTraded = new Map(
-    tradeRows.map((trade) => [
-      tradeKey(String(trade.userId), Number(trade.positionId)),
-      String(trade.latestTradeTimestamp),
-    ]),
-  );
   const signals = buildSignals(rows, tokens, traders, t, {
-    lastTraded,
+    lastTraded: lastBuys(buyRows),
     now: new Date(),
   });
   if (!signals.length) return [];

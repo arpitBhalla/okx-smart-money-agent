@@ -117,9 +117,15 @@ export function createOkx(run: Runner = execRunner): Okx {
         "--status",
         "CREATED",
       ]);
-      if (out.ok === false)
+      // Anything but a recognisable list must throw: an empty answer would reset every pending job's wait clock.
+      const data = out.data as { list?: unknown } | unknown[] | undefined;
+      const hasList =
+        Array.isArray(data) ||
+        Array.isArray((data as { list?: unknown } | undefined)?.list) ||
+        Array.isArray(out.list);
+      if (out.ok === false || !hasList)
         throw new Error(
-          `my-subscriptions failed: ${JSON.stringify(out.error ?? out)}`,
+          `my-subscriptions failed: ${JSON.stringify(out.error ?? out).slice(0, 300)}`,
         );
       return jobIds(out);
     },

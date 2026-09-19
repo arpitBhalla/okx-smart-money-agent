@@ -47,9 +47,9 @@ test("the explanation names the trader, the size and the market link", () => {
   );
 });
 
-test("the explanation says what a win pays and how recently a trader traded", () => {
+test("the explanation says what a win pays and how recently a trader bought", () => {
   const text = explainSignal(signal(), new Date("2026-09-23T10:00:00Z"));
-  assert.match(text, /Last traded 2d ago\./);
+  assert.match(text, /Last bought 2d ago\./);
   assert.match(text, /Now 0\.42; pays \+133% if right\./);
 });
 

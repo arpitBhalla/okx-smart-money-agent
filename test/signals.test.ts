@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   applyConsensus,
   buildSignals,
+  lastBuys,
   settlementDate,
   signalQuery,
   type ConsensusRow,
@@ -209,4 +210,19 @@ test("a signal needs the top wallets' money to lean its way across enough wallet
   assert.equal(applyConsensus([base], [consensus({ smartMoneyPrice: 0.55 })], thresholds).length, 0, "too split");
   assert.equal(applyConsensus([base], [consensus({ wallets: 2 })], thresholds).length, 0, "a lone whale and a friend");
   assert.equal(applyConsensus([base], [], thresholds).length, 0, "no consensus row");
+});
+
+test("freshness counts buys only, keeps the latest, and fails loudly on bad data", () => {
+  const last = lastBuys([
+    { wallet: "0xa", positionId: 1, timestamp: "2026-09-20 10:00:00" },
+    { wallet: "0xa", positionId: 1, timestamp: "2026-09-22 10:00:00" },
+    { wallet: "0xb", positionId: 2, timestamp: "2026-09-21 10:00:00" },
+  ]);
+  assert.equal(last.get("0xa:1"), "2026-09-22 10:00:00");
+  assert.equal(last.get("0xb:2"), "2026-09-21 10:00:00");
+  assert.throws(() => lastBuys([{ wallet: "0xa", positionId: 1 }]), /without wallet or timestamp/);
+  assert.throws(
+    () => lastBuys(Array.from({ length: 1000 }, () => ({ wallet: "0xa", positionId: 1, timestamp: "2026-09-22 10:00:00" }))),
+    /full page/,
+  );
 });

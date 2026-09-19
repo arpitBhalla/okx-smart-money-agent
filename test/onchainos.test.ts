@@ -105,3 +105,7 @@ test("pending subscriptions are read-only and accept list or data.list", async (
     ["j3"],
   );
 });
+
+test("pending subscriptions throw on an unrecognised answer instead of returning none", async () => {
+  await assert.rejects(createOkx(replying('{"error":"session expired"}')).pendingSubscriptions(), /my-subscriptions failed/);
+});

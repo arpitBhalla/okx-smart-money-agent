@@ -70,7 +70,7 @@ export function explainSignal(signal: Signal, now = new Date()): string {
     others > 0
       ? `${others} more top-500 trader${others > 1 ? "s" : ""} on the same side.`
       : "",
-    lastTraded ? `Last traded ${ago(lastTraded, now)}.` : "",
+    lastTraded ? `Last bought ${ago(lastTraded, now)}.` : "",
     signal.consensus
       ? `Top-500 money on this side: ${Math.round(signal.consensus.share * 100)}% across ${signal.consensus.wallets} wallets (${usd(signal.consensus.atRiskUsd)}).`
       : "",

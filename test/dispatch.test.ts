@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { runRound, type RoundOptions } from "../src/dispatch.ts";
+import { deliveryOutage, runRound, type RoundOptions } from "../src/dispatch.ts";
 import type { DeliverResult, Okx } from "../src/onchainos.ts";
 import { emptyState } from "../src/state.ts";
 import { signal } from "./fixtures.ts";
@@ -178,4 +178,24 @@ test("every admitted signal is kept in the history for the track record", async 
   assert.equal(state.history.length, 1);
   assert.equal(state.history[0].orderPrice, 0.43);
   assert.match(state.history[0].url, /^https:\/\/polymarket\.com\/event\//);
+});
+
+test("a round where every send failed is an outage even though it ran", () => {
+  const summary = { newSignals: [], activeJobs: 2, delivered: 0, failed: 3, expiredJobs: [] };
+  assert.match(deliveryOutage(summary) ?? "", /all 3 send\(s\) to 2 subscription\(s\) failed/);
+  assert.equal(deliveryOutage({ ...summary, delivered: 1 }), null, "some got through");
+  assert.equal(deliveryOutage({ ...summary, failed: 0 }), null, "nothing to send");
+  assert.equal(deliveryOutage({ ...summary, activeJobs: 0 }), null, "no subscribers");
+});
+
+test("state saved before history and eventId existed still loads and admits", async () => {
+  const state = { ...emptyState(), history: undefined } as unknown as ReturnType<typeof emptyState>;
+  const old = signal({ id: "9" }) as Partial<ReturnType<typeof signal>>;
+  delete old.eventId;
+  state.outbox = [{ signal: old as ReturnType<typeof signal>, text: "old", createdAt: "2026-09-22T11:30:00.000Z" }];
+  const migrated = { ...emptyState(), ...state, history: state.history ?? [] };
+  const round = await runRound(migrated, [signal({ id: "1", traders: [{ ...signal().traders[0], wallet: "0xnew" }] })], fakeOkx([]).okx,
+    opts({ maxSignalsPerEvent: 1, maxSignalsPerTrader: 1 }));
+  assert.deepEqual(round.newSignals.map((s) => s.id), ["1"], "the old item doesn't count toward the event cap");
+  assert.equal(migrated.history.length, 1);
 });

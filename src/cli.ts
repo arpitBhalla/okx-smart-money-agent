@@ -1,7 +1,7 @@
 import { backtestCommand } from "./backtest.ts";
 import { loadConfig, requireEnv, type Config } from "./config.ts";
 import { connectDatadash } from "./datadash.ts";
-import { runRound } from "./dispatch.ts";
+import { deliveryOutage, runRound, type RoundSummary } from "./dispatch.ts";
 import { explainSignal, formatSignal } from "./format.ts";
 import {
   loadHealth,
@@ -64,8 +64,10 @@ async function baseline(config: Config) {
   });
 }
 
-/** One round. Returns its one-line summary; throws when the round could not run. */
-async function round(config: Config): Promise<string> {
+/** One round. Returns its summary and one-line log; throws when the round could not run. */
+async function round(
+  config: Config,
+): Promise<{ line: string; summary: RoundSummary }> {
   requireEnv(
     config,
     config.dryRun ? ["datadashApiKey"] : ["datadashApiKey", "aspAgentId"],
@@ -89,7 +91,7 @@ async function round(config: Config): Promise<string> {
     `round done: ${summary.newSignals.length} new, ${summary.activeJobs} active subscription(s), ` +
     `${summary.delivered} delivered, ${summary.failed} failed`;
   log(line);
-  return line;
+  return { line, summary };
 }
 
 /**
@@ -142,7 +144,12 @@ async function run(config: Config) {
 
   while (!stopping) {
     try {
-      await afterRound(config, { ok: true, summary: await round(config) });
+      const { line, summary } = await round(config);
+      const outage = deliveryOutage(summary);
+      await afterRound(
+        config,
+        outage ? { ok: false, error: outage } : { ok: true, summary: line },
+      );
     } catch (error) {
       // One bad round (network, API) must not stop the delivery program.
       const message = (error as Error).message;

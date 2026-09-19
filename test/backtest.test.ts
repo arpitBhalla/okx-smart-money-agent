@@ -219,5 +219,6 @@ test("the report leads with the answer and lists its limits", () => {
   });
   assert.match(report, /\$144/);
   assert.match(report, /Look-ahead bias/);
-  assert.match(report, /No Datadash score/);
+  assert.match(report, /Rules not replayed/);
+  assert.match(report, /globalSmartMoney/);
 });

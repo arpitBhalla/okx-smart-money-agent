@@ -42,9 +42,9 @@ A position qualifies when all of these hold (every threshold can be changed in `
 | Datadash signal score               | 80 or more        | Datadash's 0-100 conviction score                          |
 | Size against the trader's usual bet | 3x or more        | An unusual bet, not routine activity                       |
 | Money behind it                     | $5,000 or more    | Real conviction                                            |
-| Current price                       | 10¢ to 85¢        | At least +18% if right, and odds that aren't a coin flip on nothing |
+| Current price                       | 10¢ to 85¢        | About +16% or more if right, and odds that aren't a coin flip on nothing |
 | Price against the trader's entry    | 3¢ higher to 10¢ lower | Still copyable, and the market isn't running against them |
-| Last traded by a top trader         | within 7 days     | News, not an old holding                                   |
+| Last bought by a top trader         | within 7 days     | News, not an old holding                                   |
 | Smart-money consensus               | 60%+ of top-500 money on the market, 3+ wallets | The wider smart money agrees; a lone whale is not enough |
 | Days until the market ends          | 1 to 120          | Settles in a useful time frame                             |
 
@@ -63,7 +63,7 @@ are one bet, and a copier should not take it twice. A signal held back waits for
 A signal is one line in OKX.AI's Prediction format, at most 200 characters:
 
 ```
-【Prediction】"Will Bitcoin reach $110,000 by December 31, 2026?" | NO | Limit | Order Price 0.79 | Position 3% | Settlement 2026-12-31 | Valid for 2h
+【Prediction】"Will Benjamin Netanyahu be the next Prime Minister of Israel?" | NO | Limit | Order Price 0.73 | Position 2% | Settlement 2026-10-27 | Valid for 2h
 ```
 
 The line carries no market id, because OKX's format has no field for one. The service guide tells the
@@ -106,8 +106,8 @@ through the same rules (size against the trader's usual bet, price band, days to
 delivery caps), with the follower buying at the trader's price + 1¢ and $100 per signal. Results go to
 `reports/backtest.md` (and per-signal rows to `reports/backtest.json`, not committed).
 
-Over the last 180 days: 3,782 resolved signals as delivered, 64.9% hit rate at an average entry of 0.62,
-+4.4% per signal, +$16,659 on $100 stakes (max drawdown $2,327). The edge is thin and mostly from sports markets
+Run on 2026-09-23 over the previous 180 days: 3,782 resolved signals as delivered, 64.9% hit rate at an average
+entry of 0.62, +4.4% ± 1.4% per signal, +$16,659 on $100 stakes (max drawdown $2,327). The edge is thin and mostly from sports markets
 that settle within hours; signals that took a day or more to settle returned +2.4% ± 2.9%, not distinguishable
 from zero. The report lists the limits: wallet ranks are today's (look-ahead bias), the Datadash score and the
 smart-money consensus can't be rebuilt for the past, and the usual bet size is partly estimated.
@@ -151,7 +151,7 @@ before they pay.
 - **Tiers (proposal, not listed yet).**
   | Tier     | Price            | What you get                                                                 |
   | -------- | ---------------- | ---------------------------------------------------------------------------- |
-  | Free     | 0, via A2MCP     | `/smart-money-edge` and `/market-read`: the data, signals delayed an hour     |
+  | Free     | 0, via A2MCP     | `/smart-money-edge` and `/market-read` from the `okx-a2mcp` Worker: try the data first |
   | Standard | 5 USDT a month   | This service: live signals, copy-trading through the subscriber's own agent  |
   | Pro      | 25 USDT a month  | 30-second scans, every qualifying signal (no per-round cap), a custom trader list, category filters |
   Pro is a second service on the same identity, added with `onchainos agent update` once Standard has a track record.
@@ -170,7 +170,7 @@ src/datadash.ts    Datadash MCP client (api.datadash.xyz/mcp, X-Api-Key header)
 src/health.ts      data/health.json after each round, and webhook alerts
 src/trackRecord.ts Every signal sent, scored against the market
 src/backtest.ts    Replay of past top-trader buys through the signal rules
-src/cli.ts         preview / baseline / round / run / track-record
+src/cli.ts         preview / baseline / round / run / track-record / backtest
 listing/           OKX.AI identity and service listing
 skill/SKILL.md     Instructions for the provider's agent session
 deploy/            systemd unit for the resident program

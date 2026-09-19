@@ -24,9 +24,9 @@ the signal goes out.
    up, copy-trading on, **$5 per order**. Confirm. The subscription is created on OKX.AI (escrow on X Layer).
 4. **The signal arrives (45s).** Cut to the provider logs: `new signal ...` then `job ...: delivered`. On the
    buyer screen the signal appears, for example:
-   `【Prediction】"Will Bitcoin reach $110,000 by December 31, 2026?" | NO | Limit | Order Price 0.79 | Position 3% | Settlement 2026-12-31 | Valid for 2h`
-   Say why it fired, from the `pnpm preview` reason line: three top-500 traders hold $128K of No, one of them
-   34x their usual size.
+   `【Prediction】"Will Benjamin Netanyahu be the next Prime Minister of Israel?" | NO | Limit | Order Price 0.73 | Position 2% | Settlement 2026-10-27 | Valid for 2h`
+   Say why it fired, from the `pnpm preview` reason line: a rank #120 trader bought $15.8K of No, 3.9x their usual
+   size, and 95% of top-500 money on the market (16 wallets) is on No.
 5. **Copy-trade (30s).** The buyer's agent places the $5 limit order through the Polymarket plugin. Open the
    transaction on Polygonscan and the position on Polymarket.
 6. **Close (15s).** "Datadash on OKX.AI: follow Polymarket's best traders from any agent. Datadash finds the
