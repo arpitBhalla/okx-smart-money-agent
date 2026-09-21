@@ -12,6 +12,8 @@ export type Health = {
   pendingSince: Record<string, string>;
   /** Pending jobs already alerted on, so one stuck subscription alerts once. */
   alertedPending: string[];
+  /** Last start-up alert, so systemd's restart every 30 seconds alerts at most hourly. */
+  startAlertAt: string | null;
 };
 
 export const emptyHealth = (): Health => ({
@@ -22,6 +24,7 @@ export const emptyHealth = (): Health => ({
   lastSummary: null,
   pendingSince: {},
   alertedPending: [],
+  startAlertAt: null,
 });
 
 export async function loadHealth(path: string): Promise<Health> {
@@ -105,7 +108,7 @@ export async function sendAlert(
     const response = await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: `Datadash Smart Money: ${text}`, content: `Datadash Smart Money: ${text}` }),
+      body: JSON.stringify({ text: `Datadash Polymarket Analytics: ${text}`, content: `Datadash Polymarket Analytics: ${text}` }),
       signal: AbortSignal.timeout(10_000),
     });
     if (!response.ok) log(`alert webhook answered ${response.status}`);

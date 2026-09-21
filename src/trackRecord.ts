@@ -1,5 +1,6 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import type { Datadash } from "./datadash.ts";
+import { pool } from "./pool.ts";
 import type { HistoryItem } from "./state.ts";
 
 /** The part of the outcome-token lookup the track record needs. */
@@ -25,6 +26,8 @@ export type TrackRecord = {
   avgReturn: number | null;
   /** Settled profit if a copier had put $100 on every resolved signal. */
   pnlPer100: number;
+  /** Outcome lookups that failed this run; those signals show as unknown until the next run. */
+  lookupsFailed?: number;
 };
 
 /**
@@ -66,7 +69,7 @@ const pct = (value: number | null) =>
 export function renderTrackRecord(record: TrackRecord, now: Date): string {
   const { signals, resolved, won } = record;
   const lines = [
-    "# Datadash Smart Money: track record",
+    "# Datadash Polymarket Analytics: track record",
     "",
     `Every signal sent to OKX.AI subscribers, scored against the market. Updated ${now.toISOString().slice(0, 16).replace("T", " ")} UTC.`,
     "Returns are per dollar at the signal's order price. Open signals are marked to the current price and are not in the totals.",
@@ -88,6 +91,63 @@ export function renderTrackRecord(record: TrackRecord, now: Date): string {
   return `${lines.join("\n")}\n`;
 }
 
+/**
+ * Each position's token as it stands now, read off its latest fill: the REST API has no token lookup, but every
+ * activity row carries its token filled in, with the live price and whether the market has closed. One request
+ * per position, a few at a time. A position with no fills, or whose request fails, is left out and scores as
+ * unknown; `failed` counts the failures. Throws only when every request failed, since then the API is down.
+ */
+export async function fetchOutcomes(
+  datadash: Datadash,
+  positionIds: number[],
+  concurrency = 5,
+): Promise<{ tokens: Map<number, TokenOutcome>; failed: number }> {
+  const tokens = new Map<number, TokenOutcome>();
+  const ids = [...new Set(positionIds)];
+  const errors: string[] = [];
+  await pool(ids, concurrency, async (id) => {
+    try {
+      const [latest] = await datadash.list("/api/v1/activity", {
+        filter: [{ field: "positionId", operator: "in", value: [id] }],
+        orderBy: [{ field: "timestamp", direction: "desc" }],
+        page: { limit: 1, offset: 0 },
+      });
+      const token = latest?.token;
+      if (!token) return;
+      tokens.set(id, {
+        positionId: id,
+        tokenPrice: Number(token.tokenPrice),
+        marketClosed: token.marketClosed === true,
+      });
+    } catch (error) {
+      errors.push((error as Error).message);
+    }
+  });
+  if (ids.length && errors.length === ids.length)
+    throw new Error(`every outcome lookup failed, first error: ${errors[0]}`);
+  return { tokens, failed: errors.length };
+}
+
+/**
+ * Outcomes already settled in the previous report. A won or lost market never changes, so those signals need
+ * no request; only open and unknown ones are looked up again, which keeps the run short as history grows.
+ */
+export async function settledOutcomes(path: string): Promise<Map<number, TokenOutcome>> {
+  const settled = new Map<number, TokenOutcome>();
+  let previous: TrackRecord;
+  try {
+    previous = JSON.parse(await readFile(path, "utf8")) as TrackRecord;
+  } catch {
+    return settled;
+  }
+  for (const signal of previous.signals ?? []) {
+    if (signal.status !== "won" && signal.status !== "lost") continue;
+    const positionId = Number(signal.id);
+    settled.set(positionId, { positionId, tokenPrice: signal.status === "won" ? 1 : 0, marketClosed: true });
+  }
+  return settled;
+}
+
 /** Looks up every sent signal's token and writes the track record as Markdown and JSON. */
 export async function writeTrackRecord(
   datadash: Datadash,
@@ -95,19 +155,13 @@ export async function writeTrackRecord(
   dir: string,
   now = new Date(),
 ): Promise<TrackRecord> {
-  const ids = [...new Set(history.map((item) => Number(item.id)))];
-  const tokens = new Map<number, TokenOutcome>();
-  for (let i = 0; i < ids.length; i += 500) {
-    const chunk = ids.slice(i, i + 500);
-    const rows = await datadash.queryLookup("signalScore", "positionId", {
-      filter: [{ field: "positionId", operator: "in", value: chunk }],
-      page: { limit: chunk.length, offset: 0 },
-    });
-    for (const row of rows as unknown as TokenOutcome[])
-      tokens.set(Number(row.positionId), row);
-  }
-
-  const record = scoreHistory(history, tokens);
+  const settled = await settledOutcomes(`${dir}/track-record.json`);
+  const { tokens, failed } = await fetchOutcomes(
+    datadash,
+    history.map((item) => Number(item.id)).filter((id) => !settled.has(id)),
+  );
+  for (const [id, token] of settled) tokens.set(id, token);
+  const record = { ...scoreHistory(history, tokens), lookupsFailed: failed };
   await mkdir(dir, { recursive: true });
   await writeFile(`${dir}/track-record.md`, renderTrackRecord(record, now));
   await writeFile(

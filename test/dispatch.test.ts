@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { deliveryOutage, runRound, type RoundOptions } from "../src/dispatch.ts";
+import { deliveryOutage, runRound, textAt, type RoundOptions } from "../src/dispatch.ts";
 import type { DeliverResult, Okx } from "../src/onchainos.ts";
 import { emptyState } from "../src/state.ts";
 import { signal } from "./fixtures.ts";
@@ -192,10 +192,32 @@ test("state saved before history and eventId existed still loads and admits", as
   const state = { ...emptyState(), history: undefined } as unknown as ReturnType<typeof emptyState>;
   const old = signal({ id: "9" }) as Partial<ReturnType<typeof signal>>;
   delete old.eventId;
-  state.outbox = [{ signal: old as ReturnType<typeof signal>, text: "old", createdAt: "2026-09-22T11:30:00.000Z" }];
+  // Saved outbox items still carry the `text` field the outbox no longer keeps; it is ignored.
+  state.outbox = [{ signal: old as ReturnType<typeof signal>, text: "old", createdAt: "2026-09-22T11:30:00.000Z" } as never];
   const migrated = { ...emptyState(), ...state, history: state.history ?? [] };
   const round = await runRound(migrated, [signal({ id: "1", traders: [{ ...signal().traders[0], wallet: "0xnew" }] })], fakeOkx([]).okx,
     opts({ maxSignalsPerEvent: 1, maxSignalsPerTrader: 1 }));
   assert.deepEqual(round.newSignals.map((s) => s.id), ["1"], "the old item doesn't count toward the event cap");
   assert.equal(migrated.history.length, 1);
+});
+
+test("Valid for counts down from creation, in minutes for the last hour", () => {
+  const item = { signal: signal(), createdAt: "2026-09-22T12:00:00.000Z" };
+  const at = (iso: string) => textAt(item, 2, new Date(iso));
+  assert.match(at("2026-09-22T12:02:00Z") ?? "", /Valid for 2h$/, "sent in its first round");
+  assert.match(at("2026-09-22T12:10:00Z") ?? "", /Valid for 1h$/, "1h50m left rounds down");
+  assert.match(at("2026-09-22T13:02:00Z") ?? "", /Valid for 1h$/);
+  assert.match(at("2026-09-22T13:10:00Z") ?? "", /Valid for 53m$/, "under an hour: minutes, still sent");
+  assert.match(at("2026-09-22T14:02:00Z") ?? "", /Valid for 1m$/);
+  assert.equal(at("2026-09-22T14:04:00Z"), null, "window over: not sent");
+  assert.match(textAt(item, 0.5, new Date("2026-09-22T12:00:00Z")) ?? "", /Valid for 30m$/, "a window under an hour works");
+});
+
+test("a subscriber who joins 65 minutes after a signal still gets it", async () => {
+  const state = emptyState();
+  await runRound(state, [signal()], fakeOkx([]).okx, opts());
+  const { okx, sent } = fakeOkx(["late-job"]);
+  await runRound(state, [], okx, opts({ now: new Date("2026-09-22T13:05:00Z") }));
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].text, /Valid for 58m$/);
 });

@@ -1,6 +1,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { requireEnv, type Config, type Thresholds } from "./config.ts";
-import { connectDatadash, type Datadash } from "./datadash.ts";
+import type { Config, Thresholds } from "./config.ts";
+import { createDatadash, readToken, type Datadash, type ListRow } from "./datadash.ts";
+import { pool } from "./pool.ts";
+import { isBinaryOutcome } from "./signals.ts";
 
 /**
  * "If I had followed these signals, what would I have made?"
@@ -199,7 +201,9 @@ export function buildBacktestSignals(
 ): BacktestSignal[] {
   const byWalletPosition = new Map<string, Fill[]>();
   for (const fill of fills) {
-    if (!tokens.has(fill.positionId)) continue;
+    const token = tokens.get(fill.positionId);
+    // Same rule as live: only YES/NO outcomes can become signals.
+    if (!token || !isBinaryOutcome(token.tokenName)) continue;
     const key = `${fill.wallet}:${fill.positionId}`;
     byWalletPosition.set(key, [...(byWalletPosition.get(key) ?? []), fill]);
   }
@@ -515,7 +519,7 @@ export function formatReport(input: ReportInput): string {
   );
   const sports = input.all.filter((s) => isResolved(s) && s.category === "Sports").length;
 
-  return `# Backtest: following the Datadash Smart Money signals
+  return `# Backtest: following the Datadash Polymarket Analytics signals
 
 Window: ${input.from} to ${input.to} (${input.days} days), generated ${input.generatedAt.slice(0, 16).replace("T", " ")} UTC.
 
@@ -575,20 +579,6 @@ const log = (line: string) =>
 const isoDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
 /** Runs tasks a few at a time: fast enough for 180 days of pages, gentle enough on the API. */
-async function pool<T, R>(items: T[], size: number, fn: (item: T) => Promise<R>) {
-  const results: R[] = new Array(items.length);
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: size }, async () => {
-      while (next < items.length) {
-        const i = next++;
-        results[i] = await fn(items[i]);
-      }
-    }),
-  );
-  return results;
-}
-
 const chunks = <T>(items: T[], size: number) =>
   Array.from({ length: Math.ceil(items.length / size) }, (_, i) =>
     items.slice(i * size, i * size + size),
@@ -603,16 +593,16 @@ async function fetchFills(
   t: Thresholds,
   fromMs: number,
   toMs: number,
-): Promise<Fill[]> {
+): Promise<{ fills: Fill[]; tokens: Map<number, OutcomeToken> }> {
   const slices: [string, string][] = [];
   for (let start = fromMs; start <= toMs; start += 2 * DAY_MS)
     slices.push([isoDay(start), isoDay(Math.min(start + DAY_MS, toMs))]);
 
   let done = 0;
   const pages = await pool(slices, 3, async ([from, to]) => {
-    const rows: Record<string, unknown>[] = [];
+    const rows: ListRow<"/api/v1/activity">[] = [];
     for (let offset = 0; ; offset += 1000) {
-      const page = await datadash.queryTable("activity", {
+      const page = await datadash.list("/api/v1/activity", {
         activities: ["Buy"],
         filter: [
           { field: "userRank", operator: "lte", value: t.maxTraderRank },
@@ -636,41 +626,40 @@ async function fetchFills(
     return rows;
   });
 
+  // Each fill carries its outcome token, filled in by the API with its live price and closed flag, so the tokens
+  // come from the fills themselves rather than a separate lookup.
   const seen = new Set<string>();
   const fills: Fill[] = [];
+  const tokens = new Map<number, OutcomeToken>();
+  let skipped = 0;
   for (const row of pages.flat()) {
-    const key = `${row.txHash}:${row.seqId}:${row.wallet}:${row.positionId}`;
+    const wallet = row.user?.userId;
+    const token = readToken(row.token);
+    const marketId = row.market?.id ?? token?.marketId;
+    const eventId = row.event?.id ?? token?.eventId;
+    // One incomplete row out of tens of thousands must not throw away the whole run: skip it and say so.
+    if (!wallet || !token || marketId == null || eventId == null) {
+      skipped += 1;
+      continue;
+    }
+    const key = `${row.txHash}:${row.seqId}:${wallet}:${token.positionId}`;
     if (seen.has(key)) continue;
     seen.add(key);
+    tokens.set(token.positionId, token);
     fills.push({
-      wallet: String(row.wallet),
-      positionId: Number(row.positionId),
-      marketId: Number(row.marketId),
-      eventId: Number(row.eventId),
+      wallet,
+      positionId: token.positionId,
+      marketId,
+      eventId,
       timestamp: String(row.timestamp),
       usdPrice: Number(row.usdPrice),
       usdAmount: Number(row.usdAmount),
-      tagIds: (row.tagIds as (string | number)[] | undefined) ?? [],
+      // The token's own id list, not `tags`: `tags` has a null where a tag is hidden from the public lookup.
+      tagIds: token.tagIds,
     });
   }
-  return fills;
-}
-
-async function fetchTokens(datadash: Datadash, positionIds: number[]) {
-  const tokens = new Map<number, OutcomeToken>();
-  let done = 0;
-  const batches = chunks(positionIds, 1000);
-  await pool(batches, 3, async (ids) => {
-    const rows = await datadash.queryLookup("activity", "positionId", {
-      filter: [{ field: "positionId", operator: "in", value: ids }],
-      page: { limit: ids.length, offset: 0 },
-    });
-    for (const row of rows as unknown as OutcomeToken[])
-      tokens.set(Number(row.positionId), row);
-    done += 1;
-    log(`outcome tokens: ${done}/${batches.length} batches looked up`);
-  });
-  return tokens;
+  if (skipped) log(`fills: skipped ${skipped} row(s) without a trader, token or market`);
+  return { fills, tokens };
 }
 
 /** A wallet's typical cost per position, from its all-time profile. Scaled to Datadash's figure by calibration. */
@@ -714,7 +703,7 @@ async function fetchUsualSizes(
 ) {
   const exact = new Map<string, number>();
   for (let offset = 0; ; offset += 1000) {
-    const rows = await datadash.queryTable("signalScore", {
+    const rows = await datadash.list("/api/v1/signals/scores", {
       filter: [{ field: "userRank", operator: "lte", value: t.maxTraderRank }],
       orderBy: [{ field: "tradeSize", direction: "desc" }],
       page: { limit: 1000, offset },
@@ -723,23 +712,25 @@ async function fetchUsualSizes(
       const tradeSize = Number(row.tradeSize);
       const relSize = Number(row.relSize);
       if (tradeSize > 0 && relSize > 0)
-        exact.set(String(row.userId), tradeSize / relSize);
+        if (row.user?.userId) exact.set(row.user.userId, tradeSize / relSize);
     }
     if (rows.length < 1000) break;
   }
 
   const profiles = new Map<string, { realizedBuyCost: number; positions: number }>();
   for (const batch of chunks(wallets, 1000)) {
-    const rows = await datadash.queryTable("userProfile", {
+    const rows = await datadash.list("/api/v1/profiles/user", {
       duration: { operator: "in", value: ["ALL"] },
       filter: [{ field: "userId", operator: "in", value: batch }],
       page: { limit: batch.length, offset: 0 },
     });
-    for (const row of rows)
-      profiles.set(String(row.userId), {
+    for (const row of rows) {
+      if (!row.user?.userId) continue;
+      profiles.set(row.user.userId, {
         realizedBuyCost: Number(row.realizedBuyCost),
         positions: Number(row.positions),
       });
+    }
   }
   log(
     `usual bet size: ${exact.size} wallet(s) from Datadash, ${profiles.size} all-time profile(s)`,
@@ -765,11 +756,8 @@ export async function runBacktest(
 ): Promise<BacktestData> {
   const fromMs = now - days * DAY_MS;
   log(`backtest: fetching top-trader buys from ${isoDay(fromMs)} to ${isoDay(now)}`);
-  const fills = await fetchFills(datadash, t, fromMs, now);
-  log(`fills: ${fills.length} buys fetched`);
-  const tokens = await fetchTokens(datadash, [
-    ...new Set(fills.map((fill) => fill.positionId)),
-  ]);
+  const { fills, tokens } = await fetchFills(datadash, t, fromMs, now);
+  log(`fills: ${fills.length} buys fetched, ${tokens.size} outcome tokens`);
   const { sizes, calibration } = await fetchUsualSizes(datadash, t, [
     ...new Set(fills.map((fill) => fill.wallet)),
   ]);
@@ -829,7 +817,6 @@ const envNumber = (name: string, fallback: number) => {
 
 /** `node src/cli.ts backtest [days]`: fetch, replay, write reports/backtest.md and .json, print the headline. */
 export async function backtestCommand(config: Config): Promise<void> {
-  requireEnv(config, ["datadashApiKey"]);
   const days = Number(process.argv[3]) || envNumber("BACKTEST_DAYS", 180);
   const options: BuildOptions = {
     ...defaultBuildOptions,
@@ -841,13 +828,8 @@ export async function backtestCommand(config: Config): Promise<void> {
     cooldownHours: config.signalValidHours,
   };
 
-  const datadash = await connectDatadash(config.datadashMcpUrl, config.datadashApiKey);
-  let data: BacktestData;
-  try {
-    data = await runBacktest(datadash, config.thresholds, days);
-  } finally {
-    await datadash.close();
-  }
+  const datadash = createDatadash(config.datadashApiUrl, config.datadashApiKey);
+  const data = await runBacktest(datadash, config.thresholds, days);
 
   const input = analyze(data, config.thresholds, days, options, caps);
   const delivered = new Set(input.delivered.map((signal) => signal.positionId));

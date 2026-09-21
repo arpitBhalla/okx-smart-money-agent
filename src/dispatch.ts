@@ -1,7 +1,7 @@
 import { formatSignal, marketUrl } from "./format.ts";
 import type { Okx } from "./onchainos.ts";
 import type { Signal } from "./signals.ts";
-import type { State } from "./state.ts";
+import type { OutboxItem, State } from "./state.ts";
 
 export type RoundOptions = {
   aspAgentId: string;
@@ -65,9 +65,10 @@ export function admitSignals(
 
   const createdAt = opts.now.toISOString();
   for (const signal of fresh) {
+    // The line as first sent. Later sends are rebuilt by textAt with the time left, so the outbox keeps no text.
     const text = formatSignal(signal, opts.signalValidHours);
     state.seen[signal.id] = createdAt;
-    state.outbox.push({ signal, text, createdAt });
+    state.outbox.push({ signal, createdAt });
     state.history.push({
       id: signal.id,
       question: signal.question,
@@ -80,6 +81,20 @@ export function admitSignals(
     });
   }
   return fresh;
+}
+
+/** Rounding slack for "Valid for": a signal sent within 3 minutes of creation still reads the full window. */
+const VALIDITY_SLACK_HOURS = 0.05;
+
+/**
+ * The signal line as it should read right now: "Valid for" counts down from the signal's creation, rounded down
+ * (after a 3-minute slack), in hours and then in minutes for the last hour, so a subscriber who joins late or a
+ * send that is retried still goes out for the whole window. Null only once the window has passed.
+ */
+export function textAt(item: OutboxItem, validHours: number, now: Date): string | null {
+  const elapsedHours = (now.getTime() - new Date(item.createdAt).getTime()) / 3_600_000;
+  const left = Math.min(validHours, validHours - elapsedHours + VALIDITY_SLACK_HOURS);
+  return left * 60 >= 1 ? formatSignal(item.signal, left) : null;
 }
 
 /**
@@ -126,7 +141,9 @@ export async function runRound(
     const done = new Set(state.deliveries[jobId] ?? []);
     for (const item of state.outbox) {
       if (done.has(item.signal.id)) continue;
-      const result = await okx.deliver(jobId, opts.aspAgentId, item.text);
+      const text = textAt(item, opts.signalValidHours, opts.now);
+      if (!text) continue;
+      const result = await okx.deliver(jobId, opts.aspAgentId, text);
       if (result.kind === "delivered" || result.kind === "alreadyDelivered") {
         done.add(item.signal.id);
         if (result.kind === "delivered") summary.delivered += 1;

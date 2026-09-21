@@ -2,7 +2,7 @@
   "name": "okx-smart-money-agent",
   "version": "0.1.0",
   "private": true,
-  "description": "Datadash Smart Money: Polymarket top-trader signals as an OKX.AI subscription agent",
+  "description": "Datadash Polymarket Analytics: Polymarket top-trader signals as an OKX.AI subscription agent",
   "type": "module",
   "engines": {
     "node": ">=22.18"
@@ -15,13 +15,16 @@
     "track-record": "node --env-file-if-exists=.env src/cli.ts track-record",
     "backtest": "node --env-file-if-exists=.env src/cli.ts backtest",
     "test": "node --test test/*.test.ts",
-    "check:types": "tsc --noEmit"
-  },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0"
+    "check:types": "tsc --noEmit",
+    "gen:api": "openapi-typescript openapi/datadash.json -o src/generated/datadash.ts",
+    "update:api": "curl -sf https://docs.datadash.xyz/openapi.json -o openapi/datadash.json && pnpm gen:api"
   },
   "devDependencies": {
     "@types/node": "^22.18.0",
+    "openapi-typescript": "^7.13.0",
     "typescript": "^5.9.0"
+  },
+  "dependencies": {
+    "openapi-fetch": "^0.17.0"
   }
 }

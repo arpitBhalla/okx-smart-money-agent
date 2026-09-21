@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   applyConsensus,
+  consensusRows,
+  fromSignalRows,
   buildSignals,
   lastBuys,
   settlementDate,
@@ -137,11 +139,11 @@ test("settlement is the last Eastern-time trading day, not the UTC close", () =>
 });
 
 test("the query drops positions that fell more than maxDrop below the traders entry", () => {
-  const slips = signalQuery(thresholds).filter.filter(
-    (f) => f.field === "slipAbs",
+  const slips = (signalQuery(thresholds).filter ?? []).flatMap((f) =>
+    "field" in f && f.field === "slipAbs" ? [[f.operator, f.value]] : [],
   );
   assert.deepEqual(
-    slips.map((f) => [f.operator, f.value]),
+    slips,
     [
       ["lte", 0.03],
       ["gte", -0.1],
@@ -212,17 +214,89 @@ test("a signal needs the top wallets' money to lean its way across enough wallet
   assert.equal(applyConsensus([base], [], thresholds).length, 0, "no consensus row");
 });
 
+/** An activity row as the REST API returns it: the wallet and token are filled in, not bare ids. */
+const buy = (wallet: string, positionId: number, timestamp?: string) => ({
+  user: { userId: wallet },
+  token: { positionId },
+  ...(timestamp ? { timestamp } : {}),
+});
+
 test("freshness counts buys only, keeps the latest, and fails loudly on bad data", () => {
   const last = lastBuys([
-    { wallet: "0xa", positionId: 1, timestamp: "2026-09-20 10:00:00" },
-    { wallet: "0xa", positionId: 1, timestamp: "2026-09-22 10:00:00" },
-    { wallet: "0xb", positionId: 2, timestamp: "2026-09-21 10:00:00" },
+    buy("0xa", 1, "2026-09-20 10:00:00"),
+    buy("0xa", 1, "2026-09-22 10:00:00"),
+    buy("0xb", 2, "2026-09-21 10:00:00"),
   ]);
   assert.equal(last.get("0xa:1"), "2026-09-22 10:00:00");
   assert.equal(last.get("0xb:2"), "2026-09-21 10:00:00");
-  assert.throws(() => lastBuys([{ wallet: "0xa", positionId: 1 }]), /without wallet or timestamp/);
+  assert.throws(() => lastBuys([buy("0xa", 1)]), /without wallet, position or timestamp/);
+  assert.throws(() => lastBuys([{ token: { positionId: 1 }, timestamp: "2026-09-22 10:00:00" }]), /without wallet/);
+  // A row without its token would otherwise key as "0xa:NaN" and silently fail every signal's freshness.
+  assert.throws(() => lastBuys([{ user: { userId: "0xa" }, timestamp: "2026-09-22 10:00:00" }]), /without wallet, position/);
   assert.throws(
-    () => lastBuys(Array.from({ length: 1000 }, () => ({ wallet: "0xa", positionId: 1, timestamp: "2026-09-22 10:00:00" }))),
+    () => lastBuys(Array.from({ length: 1000 }, () => buy("0xa", 1, "2026-09-22 10:00:00"))),
     /full page/,
   );
+});
+
+test("a signalScore row carries its trader and token, so no lookup is needed", () => {
+  const { rows, tokens, traders } = fromSignalRows([
+    {
+      avgEntryPrice: 0.41,
+      pNow: 0.42,
+      tradeSize: 20_000,
+      relSize: 10,
+      score: 100,
+      user: { userId: "0xaaa", displayName: "JnStrtPrdctnMrkts", rank: 237 },
+      token: {
+        positionId: 7,
+        marketId: 10,
+        eventId: 100,
+        marketQuestion: token().marketQuestion,
+        marketSlug: token().marketSlug,
+        eventSlug: token().eventSlug,
+        tokenName: "No",
+        tokenId: "123",
+        marketEndDate: "2026-12-31 12:00:00",
+        marketClosed: false,
+      },
+      market: { id: 10 },
+      event: { id: 100 },
+    },
+  ]);
+  assert.deepEqual(rows, [
+    { userId: "0xaaa", positionId: 7, marketId: 10, eventId: 100, avgEntryPrice: 0.41, pNow: 0.42, tradeSize: 20_000, relSize: 10, score: 100 },
+  ]);
+  assert.equal(tokens.get(7)?.marketQuestion, token().marketQuestion);
+  assert.equal(traders.get("0xaaa")?.rank, 237);
+
+  const [signal] = buildSignals(rows, tokens, traders, thresholds);
+  assert.equal(signal.traders[0].name, "JnStrtPrdctnMrkts");
+  assert.throws(() => fromSignalRows([{ score: 100 }]), /without user or token/);
+});
+
+test("globalSmartMoney rows are keyed by their filled-in market", () => {
+  assert.deepEqual(
+    consensusRows([{ market: { id: 701494 }, side: "No", smartMoneyPrice: 0.95, wallets: 7, atRisk: 135_480 }]),
+    [{ marketId: 701494, side: "No", smartMoneyPrice: 0.95, wallets: 7, atRisk: 135_480 }],
+  );
+});
+
+test("only YES/NO outcomes become signals, since the Prediction format has no other direction", () => {
+  const named = buildSignals([row()], tokens(token({ tokenName: "Real Madrid" })), traders(trader()), thresholds);
+  assert.equal(named.length, 0);
+  const yes = buildSignals([row()], tokens(token({ tokenName: "Yes" })), traders(trader()), thresholds);
+  assert.equal(yes.length, 1);
+});
+
+test("a row missing the market it belongs to fails loudly instead of matching nothing", () => {
+  assert.throws(() => consensusRows([{ side: "No", smartMoneyPrice: 0.9, wallets: 5, atRisk: 1 }]), /without market/);
+  const noMarket = {
+    avgEntryPrice: 0.41, pNow: 0.42, tradeSize: 20_000, relSize: 10, score: 100,
+    user: { userId: "0xaaa" },
+    token: { positionId: 7, tokenName: "No" },
+  };
+  assert.throws(() => fromSignalRows([noMarket]), /without market id/);
+  assert.equal(fromSignalRows([{ ...noMarket, token: { ...noMarket.token, marketId: 10, eventId: 100 } }]).rows[0].marketId, 10,
+    "the token's own market id is enough");
 });

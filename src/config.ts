@@ -27,7 +27,8 @@ export type Thresholds = {
 
 export type Config = {
   datadashApiKey: string;
-  datadashMcpUrl: string;
+  /** Datadash REST API root; endpoints live under /api/v1. */
+  datadashApiUrl: string;
   aspAgentId: string;
   stateFile: string;
   scanIntervalMin: number;
@@ -58,8 +59,7 @@ const num = (name: string, fallback: number): number => {
 export function loadConfig(): Config {
   return {
     datadashApiKey: process.env.DATADASH_API_KEY ?? "",
-    datadashMcpUrl:
-      process.env.DATADASH_MCP_URL || "https://api.datadash.xyz/mcp",
+    datadashApiUrl: process.env.DATADASH_API_URL || "https://api.datadash.xyz",
     aspAgentId: process.env.OKX_ASP_AGENT_ID ?? "",
     stateFile: process.env.STATE_FILE || "./data/state.json",
     scanIntervalMin: num("SCAN_INTERVAL_MIN", 2),
@@ -91,12 +91,9 @@ export function loadConfig(): Config {
 
 export function requireEnv(
   config: Config,
-  keys: ("datadashApiKey" | "aspAgentId")[],
+  keys: "aspAgentId"[],
 ): void {
-  const names = {
-    datadashApiKey: "DATADASH_API_KEY",
-    aspAgentId: "OKX_ASP_AGENT_ID",
-  } as const;
+  const names = { aspAgentId: "OKX_ASP_AGENT_ID" } as const;
   const missing = keys.filter((key) => !config[key]).map((key) => names[key]);
   if (missing.length)
     throw new Error(

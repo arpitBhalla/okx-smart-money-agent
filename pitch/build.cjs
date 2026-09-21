@@ -86,7 +86,7 @@ function card(slide, x, y, w, h, o = {}) {
 async function main() {
   const pres = new pptxgen();
   pres.layout = "LAYOUT_WIDE"; // 13.333 x 7.5
-  pres.title = "Datadash Smart Money on OKX.AI";
+  pres.title = "Datadash Polymarket Analytics on OKX.AI";
   const slide = () => {
     const s = pres.addSlide();
     s.background = { color: C.bg };
@@ -98,7 +98,7 @@ async function main() {
     const s = slide();
     pixelField(s, 8.35, -0.35, 6, 9, 0.78, 0.07, 11);
     s.addImage({ path: LOGO, x: 0.8, y: 0.7, w: 0.55, h: 0.55 });
-    T(s, "Datadash", { x: 1.5, y: 0.7, w: 4, h: 0.55, fontSize: 22, bold: true, valign: "middle" });
+    T(s, "Datadash Polymarket Analytics", { x: 1.5, y: 0.7, w: 6, h: 0.55, fontSize: 22, bold: true, valign: "middle" });
     T(s, "Follow Polymarket's best traders from any OKX agent.", {
       x: 0.8, y: 1.95, w: 7.3, h: 3.2, fontSize: 50, bold: true, valign: "top",
     });
@@ -178,7 +178,7 @@ async function main() {
       { text: " ", options: { fontSize: 8, breakLine: true } },
       { text: "copy-trading on · $5 per order", options: { color: C.muted, fontFace: MONO, fontSize: 15, breakLine: true } },
       { text: "→ ", options: { color: C.p5, fontFace: UNI, fontSize: 16 } },
-      { text: "limit order: NO at 0.73, $5, via the Polymarket plugin", options: { color: C.p5, fontFace: MONO, fontSize: 16 } },
+      { text: "if copy-trading: limit order NO at 0.73 or less, your amount", options: { color: C.p5, fontFace: MONO, fontSize: 16 } },
     ], { x: 1.15, y: 3.1, w: 7.05, h: 3.5, valign: "top", margin: 0, isTextBox: true, paraSpaceAfter: 4 });
 
     T(s, "WHY IT FIRED", { x: 9.1, y: 2.2, w: 3.5, h: 0.3, fontSize: 12, bold: true, color: C.p5, charSpacing: 3 });
@@ -188,7 +188,7 @@ async function main() {
       T(s, big, { x: 9.1, y, w: 1.95, h: 0.8, fontSize: 38, bold: true, color: col, valign: "middle" });
       T(s, cap, { x: 11.05, y, w: 1.75, h: 0.8, fontSize: 14, color: C.soft, valign: "middle" });
     });
-    s.addNotes("A real signal from pnpm preview on 2026-09-23. The last line shows what the subscriber's agent does next when copy-trading is on; in the demo we run it live.");
+    s.addNotes("A real signal from pnpm preview on 2026-09-23. The last line describes what the subscriber's agent does next when copy-trading is on; no order had been placed when this deck was made. In the demo we run it live.");
   }
 
   // 5. How it works
@@ -383,7 +383,7 @@ async function main() {
     const s = slide();
     pixelField(s, -1.0, 4.4, 17, 4, 0.78, 0.07, 3);
     s.addImage({ path: LOGO, x: 0.8, y: 0.7, w: 0.55, h: 0.55 });
-    T(s, "Datadash", { x: 1.5, y: 0.7, w: 4, h: 0.55, fontSize: 22, bold: true, valign: "middle" });
+    T(s, "Datadash Polymarket Analytics", { x: 1.5, y: 0.7, w: 6, h: 0.55, fontSize: 22, bold: true, valign: "middle" });
     T(s, "Datadash finds the trades.\nOKX runs everything else.", { x: 0.8, y: 1.6, w: 11.5, h: 2.0, fontSize: 48, bold: true, valign: "top" });
     T(s, "Follow Polymarket's best traders from any OKX agent.", { x: 0.8, y: 3.6, w: 11.5, h: 0.5, fontSize: 20, color: C.p6 });
     s.addNotes("Signals are information, not financial advice. Copy-trading is off unless each subscriber turns it on. Thank you.");

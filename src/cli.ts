@@ -1,6 +1,6 @@
 import { backtestCommand } from "./backtest.ts";
 import { loadConfig, requireEnv, type Config } from "./config.ts";
-import { connectDatadash } from "./datadash.ts";
+import { createDatadash } from "./datadash.ts";
 import { deliveryOutage, runRound, type RoundSummary } from "./dispatch.ts";
 import { explainSignal, formatSignal } from "./format.ts";
 import {
@@ -12,7 +12,7 @@ import {
 } from "./health.ts";
 import { createOkx } from "./onchainos.ts";
 import { fetchSignals } from "./signals.ts";
-import { loadState, saveState } from "./state.ts";
+import { loadState, saveState, withStateLock } from "./state.ts";
 import { writeTrackRecord } from "./trackRecord.ts";
 
 const log = (line: string) =>
@@ -31,19 +31,11 @@ async function withSignals<T>(
   config: Config,
   fn: (signals: Awaited<ReturnType<typeof fetchSignals>>) => Promise<T>,
 ) {
-  const datadash = await connectDatadash(
-    config.datadashMcpUrl,
-    config.datadashApiKey,
-  );
-  try {
-    return await fn(await fetchSignals(datadash, config.thresholds));
-  } finally {
-    await datadash.close();
-  }
+  const datadash = createDatadash(config.datadashApiUrl, config.datadashApiKey);
+  return fn(await fetchSignals(datadash, config.thresholds));
 }
 
 async function preview(config: Config) {
-  requireEnv(config, ["datadashApiKey"]);
   await withSignals(config, async (signals) => {
     console.log(`${signals.length} signal(s) qualify now\n`);
     for (const signal of signals) {
@@ -54,13 +46,14 @@ async function preview(config: Config) {
 }
 
 async function baseline(config: Config) {
-  requireEnv(config, ["datadashApiKey"]);
-  const state = await loadState(config.stateFile);
-  await withSignals(config, async (signals) => {
-    const now = new Date().toISOString();
-    for (const signal of signals) state.seen[signal.id] ??= now;
-    await saveState(config.stateFile, state);
-    log(`baseline: ${signals.length} current signal(s) marked as seen`);
+  await withStateLock(config.stateFile, async () => {
+    const state = await loadState(config.stateFile);
+    await withSignals(config, async (signals) => {
+      const now = new Date().toISOString();
+      for (const signal of signals) state.seen[signal.id] ??= now;
+      await saveState(config.stateFile, state);
+      log(`baseline: ${signals.length} current signal(s) marked as seen`);
+    });
   });
 }
 
@@ -68,10 +61,13 @@ async function baseline(config: Config) {
 async function round(
   config: Config,
 ): Promise<{ line: string; summary: RoundSummary }> {
-  requireEnv(
-    config,
-    config.dryRun ? ["datadashApiKey"] : ["datadashApiKey", "aspAgentId"],
-  );
+  return withStateLock(config.stateFile, () => lockedRound(config));
+}
+
+async function lockedRound(
+  config: Config,
+): Promise<{ line: string; summary: RoundSummary }> {
+  if (!config.dryRun) requireEnv(config, ["aspAgentId"]);
   const state = await loadState(config.stateFile);
   const summary = await withSignals(config, (signals) =>
     runRound(state, signals, createOkx(), {
@@ -123,13 +119,21 @@ async function afterRound(
 }
 
 async function run(config: Config) {
-  requireEnv(config, ["datadashApiKey", "aspAgentId"]);
+  requireEnv(config, ["aspAgentId"]);
   if (!config.dryRun) {
     const gate = await createOkx().gateCheck();
-    if (!gate.ready)
-      throw new Error(
-        `gate-check is not ready: ${JSON.stringify(gate.detail)}`,
-      );
+    if (!gate.ready) {
+      // systemd restarts us every 30s; without this the only trace would be the journal.
+      const message = `gate-check is not ready: ${JSON.stringify(gate.detail).slice(0, 300)}`;
+      const health = await loadHealth(config.healthFile);
+      const last = health.startAlertAt ? new Date(health.startAlertAt).getTime() : 0;
+      if (Date.now() - last > 3_600_000) {
+        health.startAlertAt = new Date().toISOString();
+        await saveHealth(config.healthFile, health);
+        await sendAlert(config.alertWebhookUrl, `Delivery can't start. ${message}`, log);
+      }
+      throw new Error(message);
+    }
     log("gate-check ready");
   }
 
@@ -169,21 +173,15 @@ async function run(config: Config) {
 }
 
 async function trackRecord(config: Config) {
-  requireEnv(config, ["datadashApiKey"]);
   const state = await loadState(config.stateFile);
-  const datadash = await connectDatadash(
-    config.datadashMcpUrl,
-    config.datadashApiKey,
+  const datadash = createDatadash(config.datadashApiUrl, config.datadashApiKey);
+  const record = await writeTrackRecord(datadash, state.history, "reports");
+  log(
+    `track record: ${record.signals.length} signal(s) sent, ${record.resolved} settled, ${record.won} won` +
+      (record.lookupsFailed ? `, ${record.lookupsFailed} lookup(s) failed (shown as unknown)` : "") +
+      ". " +
+      "Written to reports/track-record.md",
   );
-  try {
-    const record = await writeTrackRecord(datadash, state.history, "reports");
-    log(
-      `track record: ${record.signals.length} signal(s) sent, ${record.resolved} settled, ${record.won} won. ` +
-        "Written to reports/track-record.md",
-    );
-  } finally {
-    await datadash.close();
-  }
 }
 
 const commands: Record<string, (config: Config) => Promise<unknown>> = {

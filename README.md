@@ -1,4 +1,4 @@
-# Datadash Smart Money on OKX.AI
+# Datadash Polymarket Analytics on OKX.AI
 
 **Follow Polymarket's best traders from any OKX agent.**
 
@@ -54,7 +54,7 @@ evaluated over top-500 wallets only): of all the money those wallets hold on the
 side. Consensus alone would repeat the same markets for weeks with no entry price to trade on; one trader alone
 can be wrong or hedged elsewhere.
 
-Several top traders in the same outcome become **one** signal. A market where top traders hold opposite sides is
+Only YES/NO outcomes qualify: OKX's Prediction format has no way to name a team or candidate. Several top traders in the same outcome become **one** signal. A market where top traders hold opposite sides is
 skipped, because there is no clear side to follow. Each signal fires once, at most 3 per round, strongest first.
 While a signal is live, its event and its traders get no other signal (`MAX_SIGNALS_PER_EVENT`,
 `MAX_SIGNALS_PER_TRADER`): NO on "Bitcoin reaches $120K" and NO on "Bitcoin reaches $110K" from the same wallet
@@ -66,7 +66,8 @@ A signal is one line in OKX.AI's Prediction format, at most 200 characters:
 【Prediction】"Will Benjamin Netanyahu be the next Prime Minister of Israel?" | NO | Limit | Order Price 0.73 | Position 2% | Settlement 2026-10-27 | Valid for 2h
 ```
 
-The line carries no market id, because OKX's format has no field for one. The service guide tells the
+`Valid for` counts down: a subscriber who joins an hour after a signal fired receives `Valid for 1h`, and a
+signal with under an hour left is not sent. The line carries no market id, because OKX's format has no field for one. The service guide tells the
 subscriber's agent to match the exact question, outcome and settlement date, and to skip the signal rather than
 guess when the match is not unique.
 
@@ -80,7 +81,7 @@ Needs Node 22.18 or newer (it runs the TypeScript directly) and pnpm.
 
 ```bash
 pnpm install
-cp .env.example .env          # add DATADASH_API_KEY, and OKX_ASP_AGENT_ID once registered
+cp .env.example .env          # add OKX_ASP_AGENT_ID once registered (DATADASH_API_KEY is optional)
 pnpm preview                  # the signals that qualify right now, with the reason for each. Changes nothing.
 pnpm test                     # unit tests
 ```
@@ -166,7 +167,9 @@ src/signals.ts     Datadash query, grouping and ranking of signals
 src/format.ts      The 【Prediction】 line (max 200 characters) and the human-readable reason
 src/dispatch.ts    One round: admit new signals, deliver to each active subscription, retry failures
 src/onchainos.ts   The onchainos CLI calls: gate-check, subscribe-active, deliver, pending subscriptions (read-only)
-src/datadash.ts    Datadash MCP client (api.datadash.xyz/mcp, X-Api-Key header)
+src/datadash.ts    Datadash REST client (api.datadash.xyz/api/v1), typed from the OpenAPI spec
+src/generated/     Types generated from openapi/datadash.json. Do not edit: run `pnpm gen:api`
+openapi/           Pinned copy of https://docs.datadash.xyz/openapi.json. `pnpm update:api` refreshes it
 src/health.ts      data/health.json after each round, and webhook alerts
 src/trackRecord.ts Every signal sent, scored against the market
 src/backtest.ts    Replay of past top-trader buys through the signal rules

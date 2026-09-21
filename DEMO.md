@@ -19,8 +19,8 @@ the signal goes out.
 1. **The problem (15s).** "Polymarket's top traders make millions, and every trade they make is public. Nobody
    can watch 500 wallets. Datadash does."
 2. **Find the agent (30s).** In the buyer session: _"Find a Polymarket smart money signal service on OKX.AI."_
-   The agent finds **Datadash**: Polymarket Smart Money Signals, monthly with a 3-day free trial.
-3. **Subscribe (45s).** _"Subscribe with the free trial."_ The agent walks our Service Guide: Polymarket is set
+   The agent finds **Datadash Polymarket Analytics**: Polymarket Smart Money Signals, monthly with a 3-day free trial.
+3. **Subscribe (45s).** _"Subscribe."_ (OKX applies the 3-day trial automatically.) The agent walks our Service Guide: Polymarket is set
    up, copy-trading on, **$5 per order**. Confirm. The subscription is created on OKX.AI (escrow on X Layer).
 4. **The signal arrives (45s).** Cut to the provider logs: `new signal ...` then `job ...: delivered`. On the
    buyer screen the signal appears, for example:

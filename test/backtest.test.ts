@@ -12,7 +12,9 @@ import {
   type Fill,
   type OutcomeToken,
   type UsualSize,
+  runBacktest,
 } from "../src/backtest.ts";
+import type { Datadash } from "../src/datadash.ts";
 import { thresholds } from "./fixtures.ts";
 
 const WALLET = "0xaaa0000000000000000000000000000000000001";
@@ -221,4 +223,58 @@ test("the report leads with the answer and lists its limits", () => {
   assert.match(report, /Look-ahead bias/);
   assert.match(report, /Rules not replayed/);
   assert.match(report, /globalSmartMoney/);
+});
+
+test("fills and their outcome tokens both come from the REST activity rows", async () => {
+  const token = {
+    positionId: 7,
+    marketId: 10,
+    eventId: 100,
+    tagIds: ["2", "103149"],
+    marketQuestion: "Will X happen?",
+    marketSlug: "will-x-happen",
+    eventSlug: "x",
+    tokenName: "Yes",
+    tokenPrice: 1,
+    marketClosed: true,
+    marketClosedTime: "2026-09-22 10:00:00",
+    marketEndDate: "2026-09-22 10:00:00",
+  };
+  const fill = {
+    txHash: "0xt",
+    seqId: 1,
+    timestamp: "2026-09-21 10:00:00",
+    usdPrice: 0.4,
+    usdAmount: 9000,
+    user: { userId: "0xaaa" },
+    token,
+    market: { id: 10 },
+    event: { id: 100 },
+    // The API leaves a null where a tag is hidden from the public lookup; categories must not depend on it.
+    tags: [{ id: 2 }, null],
+  };
+  const datadash: Datadash = {
+    list: async (endpoint) => (endpoint === "/api/v1/activity" ? [fill, fill] : []) as never,
+  };
+  const data = await runBacktest(datadash, thresholds, 1, Date.parse("2026-09-22T12:00:00Z"));
+  assert.equal(data.fills.length, 1, "the same fill twice is counted once");
+  assert.deepEqual(data.fills[0], {
+    wallet: "0xaaa",
+    positionId: 7,
+    marketId: 10,
+    eventId: 100,
+    timestamp: "2026-09-21 10:00:00",
+    usdPrice: 0.4,
+    usdAmount: 9000,
+    tagIds: ["2", "103149"],
+  });
+  assert.equal(data.tokens.get(7)?.marketClosed, true);
+});
+
+test("like the live agent, the backtest only signals YES/NO outcomes", () => {
+  assert.equal(
+    buildBacktestSignals([fill()], tokens(outcome({ tokenName: "Real Madrid" })), usual(), thresholds).length,
+    0,
+  );
+  assert.equal(buildBacktestSignals([fill()], tokens(outcome({ tokenName: "no" })), usual(), thresholds).length, 1);
 });

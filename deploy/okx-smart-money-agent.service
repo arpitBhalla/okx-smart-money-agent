@@ -4,7 +4,7 @@
 # Change User and WorkingDirectory to match the server. The user must be the one that ran `onchainos` login,
 # because the CLI keeps its session in that user's home directory.
 [Unit]
-Description=Datadash Smart Money signal delivery for OKX.AI
+Description=Datadash Polymarket Analytics signal delivery for OKX.AI
 After=network-online.target
 Wants=network-online.target
 

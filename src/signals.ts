@@ -1,5 +1,5 @@
 import type { Thresholds } from "./config.ts";
-import type { Datadash } from "./datadash.ts";
+import { readToken, type Datadash, type ListBody, type ListRow } from "./datadash.ts";
 
 /** One row of Datadash's signalScore table: a top wallet's currently-held outcome position. */
 export type PositionRow = {
@@ -83,6 +83,16 @@ export type Consensus = { share: number; wallets: number; atRiskUsd: number };
 
 const round2 = (value: number) => Math.round(value * 100) / 100;
 
+/** OKX's Prediction format carries a YES/NO direction, so only those outcomes can become signals. The backtest uses it too. */
+export const isBinaryOutcome = (tokenName: string) => /^(yes|no)$/i.test(tokenName);
+
+/** An id the rest of the pipeline keys on. Missing, it would turn into NaN and silently match nothing, so it throws. */
+const requireId = (value: number | null | undefined, what: string, row: unknown): number => {
+  if (value === undefined || value === null || !Number.isFinite(Number(value)))
+    throw new Error(`Datadash row without ${what}: ${JSON.stringify(row).slice(0, 200)}`);
+  return Number(value);
+};
+
 /** Datadash timestamps are UTC without a zone: "2026-09-19 16:31:33". */
 export const parseUtc = (value: string) =>
   new Date(`${value.replace(" ", "T")}Z`);
@@ -106,7 +116,7 @@ export function settlementDate(endDateUtc: string | null): string | null {
   return easternDate.format(new Date(end.getTime() - 60_000));
 }
 
-export function signalQuery(t: Thresholds, limit = 100) {
+export function signalQuery(t: Thresholds, limit = 100): ListBody<"/api/v1/signals/scores"> {
   return {
     filter: [
       { field: "userRank", operator: "lte", value: t.maxTraderRank },
@@ -139,15 +149,17 @@ export const PAGE_LIMIT = 1000;
  * position's last-trade time, and a trader trimming a bet is not news. Throws rather than returning a map that
  * would silently fail every signal: on a full page, or when the rows no longer carry the fields we read.
  */
-export function lastBuys(rows: Record<string, unknown>[]): LastTraded {
+export function lastBuys(rows: ListRow<"/api/v1/activity">[]): LastTraded {
   if (rows.length >= PAGE_LIMIT)
     throw new Error(`Datadash returned a full page of ${PAGE_LIMIT} buys; freshness would be incomplete`);
   const last: LastTraded = new Map();
   for (const row of rows) {
     const at = String(row.timestamp);
-    if (!row.wallet || Number.isNaN(parseUtc(at).getTime()))
-      throw new Error(`Datadash activity row without wallet or timestamp: ${JSON.stringify(row).slice(0, 200)}`);
-    const key = tradeKey(String(row.wallet), Number(row.positionId));
+    const wallet = row.user?.userId;
+    const positionId = row.token?.positionId;
+    if (!wallet || positionId === undefined || Number.isNaN(parseUtc(at).getTime()))
+      throw new Error(`Datadash activity row without wallet, position or timestamp: ${JSON.stringify(row).slice(0, 200)}`);
+    const key = tradeKey(wallet, positionId);
     if (!last.has(key) || parseUtc(at) > parseUtc(last.get(key)!)) last.set(key, at);
   }
   return last;
@@ -171,6 +183,8 @@ export function buildSignals(
   for (const row of rows) {
     const token = tokens.get(row.positionId);
     if (!token || token.marketClosed) continue;
+    // OKX's Prediction format carries a YES/NO direction; a named outcome ("Real Madrid") can't be expressed.
+    if (!isBinaryOutcome(token.tokenName)) continue;
     byPosition.set(row.positionId, [
       ...(byPosition.get(row.positionId) ?? []),
       row,
@@ -288,50 +302,70 @@ export function applyConsensus(
   });
 }
 
-/** Pulls the live top-trader positions from Datadash and turns them into ranked signals. */
+/**
+ * Splits signalScore rows into the position rows `buildSignals` ranks and the trader and token each row already
+ * carries: the REST API fills in `user` and `token` on every row, so there is nothing to look up separately.
+ */
+export function fromSignalRows(raw: ListRow<"/api/v1/signals/scores">[]): {
+  rows: PositionRow[];
+  tokens: Map<number, TokenInfo>;
+  traders: Map<string, TraderInfo>;
+} {
+  const rows: PositionRow[] = [];
+  const tokens = new Map<number, TokenInfo>();
+  const traders = new Map<string, TraderInfo>();
+  for (const item of raw) {
+    const user = item.user;
+    const token = readToken(item.token);
+    if (!user?.userId || !token)
+      throw new Error(`Datadash signal row without user or token: ${JSON.stringify(item).slice(0, 200)}`);
+    const row: PositionRow = {
+      userId: user.userId,
+      positionId: token.positionId,
+      marketId: requireId(item.market?.id ?? token.marketId, "market id", item),
+      eventId: requireId(item.event?.id ?? token.eventId, "event id", item),
+      avgEntryPrice: Number(item.avgEntryPrice),
+      pNow: Number(item.pNow),
+      tradeSize: Number(item.tradeSize),
+      relSize: Number(item.relSize),
+      score: Number(item.score),
+    };
+    rows.push(row);
+    tokens.set(row.positionId, token);
+    traders.set(row.userId, {
+      userId: user.userId,
+      displayName: user.displayName ?? null,
+      pseudonym: user.pseudonym ?? null,
+      rank: user.rank ?? null,
+    });
+  }
+  return { rows, tokens, traders };
+}
+
+/** Pulls the live top-trader positions from Datadash and turns them into ranked signals: two or three REST calls. */
 export async function fetchSignals(
   datadash: Datadash,
   t: Thresholds,
 ): Promise<Signal[]> {
-  const rows = (await datadash.queryTable(
-    "signalScore",
-    signalQuery(t),
-  )) as unknown as PositionRow[];
+  const { rows, tokens, traders } = fromSignalRows(
+    await datadash.list("/api/v1/signals/scores", signalQuery(t)),
+  );
   if (!rows.length) return [];
 
   const positionIds = [...new Set(rows.map((row) => row.positionId))];
   const userIds = [...new Set(rows.map((row) => row.userId))];
-  const [tokenRows, userRows, buyRows] = await Promise.all([
-    datadash.queryLookup("signalScore", "positionId", {
-      filter: [{ field: "positionId", operator: "in", value: positionIds }],
-      page: { limit: positionIds.length, offset: 0 },
-    }),
-    datadash.queryLookup("signalScore", "userId", {
-      filter: [{ field: "userId", operator: "in", value: userIds }],
-      page: { limit: userIds.length, offset: 0 },
-    }),
-    // Recent buys only, for freshness. Pairs outside `rows` are ignored.
-    datadash.queryTable("activity", {
-      activities: ["Buy"],
-      filter: [
-        { field: "wallet", operator: "in", value: userIds },
-        { field: "positionId", operator: "in", value: positionIds },
-        { field: "timestamp", operator: "last", value: { length: Math.ceil(t.maxPositionAgeDays), unit: "day" } },
-      ],
-      orderBy: [{ field: "timestamp", direction: "desc" }],
-      page: { limit: PAGE_LIMIT, offset: 0 },
-    }),
-  ]);
+  // Recent buys only, for freshness. Pairs outside `rows` are ignored.
+  const buyRows = await datadash.list("/api/v1/activity", {
+    activities: ["Buy"],
+    filter: [
+      { field: "wallet", operator: "in", value: userIds },
+      { field: "positionId", operator: "in", value: positionIds },
+      { field: "timestamp", operator: "last", value: { length: Math.ceil(t.maxPositionAgeDays), unit: "day" } },
+    ],
+    orderBy: [{ field: "timestamp", direction: "desc" }],
+    page: { limit: PAGE_LIMIT, offset: 0 },
+  });
 
-  const tokens = new Map(
-    (tokenRows as unknown as TokenInfo[]).map((token) => [
-      Number(token.positionId),
-      token,
-    ]),
-  );
-  const traders = new Map(
-    (userRows as unknown as TraderInfo[]).map((user) => [user.userId, user]),
-  );
   const signals = buildSignals(rows, tokens, traders, t, {
     lastTraded: lastBuys(buyRows),
     now: new Date(),
@@ -339,7 +373,7 @@ export async function fetchSignals(
   if (!signals.length) return [];
 
   const marketIds = [...new Set(signals.map((signal) => signal.marketId))];
-  const consensus = await datadash.queryTable("globalSmartMoney", {
+  const consensus = await datadash.list("/api/v1/smart-money/global", {
     // Evaluate the consensus over the same top-ranked wallets the signals come from, not every wallet.
     walletFilters: [
       {
@@ -354,5 +388,15 @@ export async function fetchSignals(
     filter: [{ field: "marketId", operator: "in", value: marketIds }],
     page: { limit: marketIds.length, offset: 0 },
   });
-  return applyConsensus(signals, consensus as unknown as ConsensusRow[], t);
+  return applyConsensus(signals, consensusRows(consensus), t);
 }
+
+/** globalSmartMoney rows carry their market as a filled-in `market`; the consensus check keys on its id. */
+export const consensusRows = (raw: ListRow<"/api/v1/smart-money/global">[]): ConsensusRow[] =>
+  raw.map((row) => ({
+    marketId: requireId(row.market?.id, "market", row),
+    side: String(row.side),
+    smartMoneyPrice: Number(row.smartMoneyPrice),
+    wallets: Number(row.wallets),
+    atRisk: Number(row.atRisk),
+  }));
