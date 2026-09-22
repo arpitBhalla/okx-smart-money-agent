@@ -1,6 +1,8 @@
 {
   "role": "asp",
-  "name": "Datadash Polymarket Analytics",
+  "name": "Datadash Polymarket",
   "description": "Polymarket analytics that tracks every wallet and turns what the most profitable traders do into signals you can follow.",
-  "avatar": "listing/avatar.png"
+  "avatar": "listing/avatar.png",
+  "agentId": "13854",
+  "createdTx": "0x170bafa2b652da0f3e56a9c0d878c77169a1651ecff48f0275c0a53e16761d20"
 }
