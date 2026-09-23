@@ -1,6 +1,11 @@
 export type Thresholds = {
-  /** Only wallets ranked this high or better on the all-time PnL leaderboard. */
+  /**
+   * Smart money: wallets ranked this high or better on the all-time PnL leaderboard. The consensus check is
+   * measured over them.
+   */
   maxTraderRank: number;
+  /** Rank limit for the wallet whose bet triggers a signal. 0 = any wallet: the Datadash score decides. */
+  maxTriggerRank: number;
   /** Datadash Signal Score, 0-100. */
   minScore: number;
   /** Bet size against the wallet's usual size (3 = three times bigger than usual). */
@@ -23,6 +28,8 @@ export type Thresholds = {
    */
   minConsensusShare: number;
   minConsensusWallets: number;
+  /** Top-ranked money on the signal's side, in USD: a few dollars from three wallets is not a consensus. */
+  minConsensusUsd: number;
 };
 
 export type Config = {
@@ -74,6 +81,7 @@ export function loadConfig(): Config {
     pendingAlertMin: num("PENDING_ALERT_MIN", 15),
     thresholds: {
       maxTraderRank: num("MAX_TRADER_RANK", 500),
+      maxTriggerRank: num("MAX_TRIGGER_RANK", 0),
       minScore: num("MIN_SCORE", 80),
       minRelSize: num("MIN_REL_SIZE", 3),
       minTradeUsd: num("MIN_TRADE_USD", 5000),
@@ -85,6 +93,7 @@ export function loadConfig(): Config {
       maxPositionAgeDays: num("MAX_POSITION_AGE_DAYS", 7),
       minConsensusShare: num("MIN_CONSENSUS_SHARE", 0.6),
       minConsensusWallets: num("MIN_CONSENSUS_WALLETS", 3),
+      minConsensusUsd: num("MIN_CONSENSUS_USD", 10_000),
     },
   };
 }

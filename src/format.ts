@@ -75,10 +75,11 @@ const ago = (at: string, now: Date) => {
 };
 
 /** Why the signal fired, for logs and the demo. Never delivered: OKX caps a signal at 200 characters. */
-export function explainSignal(signal: Signal, now = new Date()): string {
+export function explainSignal(signal: Signal, now = new Date(), topRank = 500): string {
   const lead = signal.traders[0];
   const others = signal.traders.length - 1;
-  const who = `${lead.name}${lead.rank ? ` (rank #${lead.rank})` : ""}`;
+  // Any wallet can trigger a signal; a rank is only worth showing when it is itself smart money.
+  const who = `${lead.name}${lead.rank && lead.rank <= topRank ? ` (rank #${lead.rank})` : ""}`;
   const lastTraded = signal.traders
     .map((trader) => trader.lastTradedAt)
     .filter((at): at is string => at !== null)
@@ -89,7 +90,7 @@ export function explainSignal(signal: Signal, now = new Date()): string {
     `${lead.relSize.toFixed(1)}x their usual size.`,
     `Signal score ${Math.round(signal.score)}.`,
     others > 0
-      ? `${others} more top-500 trader${others > 1 ? "s" : ""} on the same side.`
+      ? `${others} more trader${others > 1 ? "s" : ""} with a high score on the same side.`
       : "",
     lastTraded ? `Last bought ${ago(lastTraded, now)}.` : "",
     signal.consensus

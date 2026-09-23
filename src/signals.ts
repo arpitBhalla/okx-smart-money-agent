@@ -116,10 +116,16 @@ export function settlementDate(endDateUtc: string | null): string | null {
   return easternDate.format(new Date(end.getTime() - 60_000));
 }
 
-export function signalQuery(t: Thresholds, limit = 100): ListBody<"/api/v1/signals/scores"> {
+/**
+ * The candidate positions: the top `limit` by Datadash score, then by bet size, from any wallet unless
+ * `maxTriggerRank` narrows it. The score already weighs the wallet; the smart-money consensus confirms later.
+ */
+export function signalQuery(t: Thresholds, limit = PAGE_LIMIT): ListBody<"/api/v1/signals/scores"> {
   return {
     filter: [
-      { field: "userRank", operator: "lte", value: t.maxTraderRank },
+      ...(t.maxTriggerRank > 0
+        ? [{ field: "userRank", operator: "lte", value: t.maxTriggerRank } as const]
+        : []),
       { field: "score", operator: "gte", value: t.minScore },
       { field: "relSize", operator: "gte", value: t.minRelSize },
       { field: "tradeSize", operator: "gte", value: t.minTradeUsd },
@@ -130,28 +136,39 @@ export function signalQuery(t: Thresholds, limit = 100): ListBody<"/api/v1/signa
       { field: "daysToResolution", operator: "gte", value: 1 },
       { field: "daysToResolution", operator: "lte", value: t.maxDaysLeft },
     ],
-    orderBy: [{ field: "score", direction: "desc" }],
+    orderBy: [
+      { field: "score", direction: "desc" },
+      { field: "tradeSize", direction: "desc" },
+    ],
     page: { limit, offset: 0 },
   };
+}
+
+const shortAddress = (wallet: string) => `${wallet.slice(0, 6)}…${wallet.slice(-4)}`;
+
+/** The trader's Polymarket name, or a short address when the name is only an address with a suffix. */
+export function traderName(info: TraderInfo | undefined, wallet: string): string {
+  const name = info?.displayName || info?.pseudonym || "";
+  return !name || /^0x[0-9a-f]{20,}/i.test(name) ? shortAddress(wallet) : name;
 }
 
 /** `${wallet}:${positionId}` → when that wallet last bought that position. */
 export type LastTraded = Map<string, string>;
 
+/** Datadash's page cap. */
+export const PAGE_LIMIT = 1000;
+const MAX_BUY_PAGES = 10;
+
 const tradeKey = (userId: string, positionId: number) =>
   `${userId}:${positionId}`;
 
-/** Datadash's page cap. A full page means rows were cut off, so the caller must not trust it as complete. */
-export const PAGE_LIMIT = 1000;
 
 /**
  * The latest buy per wallet and position, from Datadash `activity` rows. Buys only: a sell also moves a
  * position's last-trade time, and a trader trimming a bet is not news. Throws rather than returning a map that
- * would silently fail every signal: on a full page, or when the rows no longer carry the fields we read.
+ * would silently fail every signal, when the rows no longer carry the fields we read.
  */
 export function lastBuys(rows: ListRow<"/api/v1/activity">[]): LastTraded {
-  if (rows.length >= PAGE_LIMIT)
-    throw new Error(`Datadash returned a full page of ${PAGE_LIMIT} buys; freshness would be incomplete`);
   const last: LastTraded = new Map();
   for (const row of rows) {
     const at = String(row.timestamp);
@@ -248,10 +265,7 @@ export function buildSignals(
           const info = traders.get(row.userId);
           return {
             wallet: row.userId,
-            name:
-              info?.displayName ||
-              info?.pseudonym ||
-              `${row.userId.slice(0, 6)}…${row.userId.slice(-4)}`,
+            name: traderName(info, row.userId),
             rank: info?.rank ?? null,
             entryPrice: row.avgEntryPrice,
             tradeUsd: row.tradeSize,
@@ -288,10 +302,14 @@ export function applyConsensus(
   return signals.flatMap((signal) => {
     const row = byMarket.get(signal.marketId);
     if (!row) return [];
-    // The table names only the favored side; on the other side the share is the rest, and its wallet count unknown.
-    const favored = row.side.toLowerCase() === signal.outcome.toLowerCase();
-    const share = favored ? row.smartMoneyPrice : 1 - row.smartMoneyPrice;
-    if (!favored || share < t.minConsensusShare || row.wallets < t.minConsensusWallets)
+    // The table describes only the side it favors; a signal on the other side has no consensus behind it.
+    if (row.side.toLowerCase() !== signal.outcome.toLowerCase()) return [];
+    const share = row.smartMoneyPrice;
+    if (
+      share < t.minConsensusShare ||
+      row.wallets < t.minConsensusWallets ||
+      row.atRisk < t.minConsensusUsd
+    )
       return [];
     return [
       {
@@ -352,29 +370,29 @@ export async function fetchSignals(
   );
   if (!rows.length) return [];
 
-  const positionIds = [...new Set(rows.map((row) => row.positionId))];
-  const userIds = [...new Set(rows.map((row) => row.userId))];
-  // Recent buys only, for freshness. Pairs outside `rows` are ignored.
-  const buyRows = await datadash.list("/api/v1/activity", {
-    activities: ["Buy"],
-    filter: [
-      { field: "wallet", operator: "in", value: userIds },
-      { field: "positionId", operator: "in", value: positionIds },
-      { field: "timestamp", operator: "last", value: { length: Math.ceil(t.maxPositionAgeDays), unit: "day" } },
-    ],
-    orderBy: [{ field: "timestamp", direction: "desc" }],
-    page: { limit: PAGE_LIMIT, offset: 0 },
-  });
+  // Cheap checks first. The top-500 agreement is one request for every candidate market and drops most of them;
+  // only the survivors need their recent buys, which is the slow, paged request. Same result as checking
+  // freshness first: both-sided markets are dropped before either check, and each check is per signal.
+  const candidates = buildSignals(rows, tokens, traders, t);
+  if (!candidates.length) return [];
+  const consensus = consensusRows(
+    await datadash.list("/api/v1/smart-money/global", smartMoneyQuery(t, candidates)),
+  );
+  const agreed = new Set(applyConsensus(candidates, consensus, t).map((signal) => signal.id));
+  if (!agreed.size) return [];
+  const kept = rows.filter((row) => agreed.has(String(row.positionId)));
 
-  const signals = buildSignals(rows, tokens, traders, t, {
-    lastTraded: lastBuys(buyRows),
+  const signals = buildSignals(kept, tokens, traders, t, {
+    lastTraded: lastBuys(await recentBuys(datadash, t, kept)),
     now: new Date(),
   });
-  if (!signals.length) return [];
+  return applyConsensus(signals, consensus, t);
+}
 
+/** The top-500 wallets' money on each candidate's market, over the same wallet set the consensus rule names. */
+function smartMoneyQuery(t: Thresholds, signals: Signal[]): ListBody<"/api/v1/smart-money/global"> {
   const marketIds = [...new Set(signals.map((signal) => signal.marketId))];
-  const consensus = await datadash.list("/api/v1/smart-money/global", {
-    // Evaluate the consensus over the same top-ranked wallets the signals come from, not every wallet.
+  return {
     walletFilters: [
       {
         field: "userId",
@@ -387,8 +405,34 @@ export async function fetchSignals(
     ],
     filter: [{ field: "marketId", operator: "in", value: marketIds }],
     page: { limit: marketIds.length, offset: 0 },
-  });
-  return applyConsensus(signals, consensusRows(consensus), t);
+  };
+}
+
+/** Recent buys by these rows' wallets into these rows' positions, for freshness. Paged; pairs outside `rows` are ignored. */
+export async function recentBuys(
+  datadash: Datadash,
+  t: Thresholds,
+  rows: PositionRow[],
+): Promise<ListRow<"/api/v1/activity">[]> {
+  const positionIds = [...new Set(rows.map((row) => row.positionId))];
+  const userIds = [...new Set(rows.map((row) => row.userId))];
+  const buys: ListRow<"/api/v1/activity">[] = [];
+  for (let page = 0; ; page++) {
+    if (page === MAX_BUY_PAGES)
+      throw new Error(`more than ${MAX_BUY_PAGES * PAGE_LIMIT} recent buys; freshness would be incomplete`);
+    const batch = await datadash.list("/api/v1/activity", {
+      activities: ["Buy"],
+      filter: [
+        { field: "wallet", operator: "in", value: userIds },
+        { field: "positionId", operator: "in", value: positionIds },
+        { field: "timestamp", operator: "last", value: { length: Math.ceil(t.maxPositionAgeDays), unit: "day" } },
+      ],
+      orderBy: [{ field: "timestamp", direction: "desc" }],
+      page: { limit: PAGE_LIMIT, offset: page * PAGE_LIMIT },
+    });
+    buys.push(...batch);
+    if (batch.length < PAGE_LIMIT) return buys;
+  }
 }
 
 /** globalSmartMoney rows carry their market as a filled-in `market`; the consensus check keys on its id. */

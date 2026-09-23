@@ -2,8 +2,9 @@
 
 **Follow Polymarket's best traders from any OKX agent.**
 
-Datadash tracks every Polymarket wallet. This agent watches the 500 most profitable ones and sends a signal
-when one of them makes an unusually big bet. On OKX.AI it is a subscription service: a monthly fee with a
+Datadash tracks every Polymarket wallet. This agent takes the 1,000 highest-scoring positions Datadash sees,
+from any wallet, and sends a signal when one is an unusually big bet that the 500 most profitable traders agree
+with. On OKX.AI it is a subscription service: a monthly fee with a
 3-day free trial. Subscribers' agents receive each signal and, if the subscriber turns copy-trading on, place
 the same bet through OKX's Polymarket plugin for the amount the subscriber chose.
 
@@ -13,7 +14,7 @@ OKX Dev Day 2026, **Build a Company** track.
 
 ```
 Datadash (every Polymarket wallet, scored)
-        │  every 2 minutes: top-500 traders' new high-conviction positions
+        │  every 2 minutes: the 1,000 highest-scoring positions, from any wallet
         ▼
 Resident delivery program (this repo, `pnpm start`)
         │  onchainos agent subscribe-active   → who is subscribed right now
@@ -38,18 +39,19 @@ A position qualifies when all of these hold (every threshold can be changed in `
 
 | Rule                                | Default           | Why                                                        |
 | ----------------------------------- | ----------------- | ---------------------------------------------------------- |
-| Trader rank by all-time PnL         | top 500           | Proven traders only                                        |
+| Candidates                          | top 1,000 by score, then bet size, any wallet | The score already weighs the wallet; consensus checks the rest |
 | Datadash signal score               | 80 or more        | Datadash's 0-100 conviction score                          |
 | Size against the trader's usual bet | 3x or more        | An unusual bet, not routine activity                       |
 | Money behind it                     | $5,000 or more    | Real conviction                                            |
 | Current price                       | 10¢ to 85¢        | About +16% or more if right, and odds that aren't a coin flip on nothing |
 | Price against the trader's entry    | 3¢ higher to 10¢ lower | Still copyable, and the market isn't running against them |
-| Last bought by a top trader         | within 7 days     | News, not an old holding                                   |
-| Smart-money consensus               | 60%+ of top-500 money on the market, 3+ wallets | The wider smart money agrees; a lone whale is not enough |
+| Last bought by a signalling trader  | within 7 days     | News, not an old holding                                   |
+| Smart-money consensus               | 60%+ of top-500 money on the market, 3+ wallets, $10,000+ | The 500 most profitable traders agree, with real money; a lone whale is not enough |
 | Days until the market ends          | 1 to 120          | Settles in a useful time frame                             |
 
-Two Datadash views work together. The **trigger** is one top trader's unusual bet (`signalScore`): it gives
-the moment, the entry price and the size. The **confirmation** is the smart-money consensus (`globalSmartMoney`,
+Two Datadash views work together. The **trigger** is an unusual, high-scoring bet by any wallet (`signalScore`,
+the top 1,000 by score; `MAX_TRIGGER_RANK` limits it to ranked traders if wanted): it gives the moment, the entry
+price and the size. The **confirmation** is the smart-money consensus (`globalSmartMoney`,
 evaluated over top-500 wallets only): of all the money those wallets hold on the market, most must be on the same
 side. Consensus alone would repeat the same markets for weeks with no entry price to trade on; one trader alone
 can be wrong or hedged elsewhere.
@@ -102,16 +104,33 @@ subscription waits more than 15 minutes for the agent session to accept it.
 ## Backtest
 
 `pnpm backtest` (or `pnpm backtest 90`) asks "what if I had followed every signal?" Datadash's live table only holds
-positions held today, so the backtest replays the activity log instead: every $5k+ buy by a top-500 wallet, run
-through the same rules (size against the trader's usual bet, price band, days to end, one side per market, the
-delivery caps), with the follower buying at the trader's price + 1¢ and $100 per signal. Results go to
-`reports/backtest.md` (and per-signal rows to `reports/backtest.json`, not committed).
+positions held today, so the backtest replays the activity log instead: every $5k+ buy by a top-500 wallet on a
+YES/NO market, run through the rules it can rebuild (size against the trader's usual bet, price band, days to end,
+one side per market, the delivery caps), with the follower buying at the trader's price + 1¢ and $100 per signal.
+Results go to `reports/backtest.md` (and per-signal rows to `reports/backtest.json`, not committed).
 
-Run on 2026-09-23 over the previous 180 days: 3,782 resolved signals as delivered, 64.9% hit rate at an average
-entry of 0.62, +4.4% ± 1.4% per signal, +$16,659 on $100 stakes (max drawdown $2,327). The edge is thin and mostly from sports markets
-that settle within hours; signals that took a day or more to settle returned +2.4% ± 2.9%, not distinguishable
-from zero. The report lists the limits: wallet ranks are today's (look-ahead bias), the Datadash score and the
-smart-money consensus can't be rebuilt for the past, and the usual bet size is partly estimated.
+Run on 2026-09-23 over the previous 180 days, with the YES/NO-only rule:
+
+|                        | Resolved signals | Hit rate | Avg entry | Avg return per signal | P&L at $100 each | Max drawdown |
+| ---------------------- | ---------------: | -------: | --------: | --------------------: | ---------------: | -----------: |
+| As delivered (caps on) |              615 |    66.5% |      0.65 |          +2.5% ± 3.6% |          +$1,548 |       $2,514 |
+| All signals            |              681 |    66.1% |      0.65 |          +1.5% ± 3.4% |            +$994 |       $2,674 |
+
+**What this says:** the replayed signals roughly broke even. The average return is well inside its error bar, so
+there is no demonstrated edge from these rules alone. Entries between 0.10 and 0.30 lost 10% per signal; entries
+between 0.70 and 0.85 made 3.3%. An earlier run that also counted team-name markets (mostly sports settling within
+hours) looked stronger, at +4.4% over 3,782 signals; those markets can't be sent in OKX's YES/NO format, so they
+are out.
+
+**What it can't test**, and why the live product may do better or worse:
+
+- The live trigger takes any wallet among Datadash's 1,000 top-scoring positions; the replay only has top-500
+  wallets, ranked by today's leaderboard (look-ahead bias).
+- The Datadash score and the smart-money consensus (60%+ of top-500 money, $10,000+) exist only for today's
+  holdings, so the two main live filters are not in these numbers.
+- A wallet's usual bet size is partly estimated, and there is no model of whether the follower's limit order fills.
+
+The live track record (`pnpm track-record`) is the real test.
 
 ## Track record
 

@@ -8,6 +8,7 @@ import type {
 
 export const thresholds: Thresholds = {
   maxTraderRank: 500,
+  maxTriggerRank: 0,
   minScore: 80,
   minRelSize: 3,
   minTradeUsd: 5000,
@@ -19,6 +20,7 @@ export const thresholds: Thresholds = {
   maxPositionAgeDays: 7,
   minConsensusShare: 0.6,
   minConsensusWallets: 3,
+  minConsensusUsd: 10_000,
 };
 
 export const row = (over: Partial<PositionRow> = {}): PositionRow => ({

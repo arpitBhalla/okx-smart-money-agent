@@ -136,8 +136,8 @@ async function main() {
     label(s, "02", "THE IDEA");
     headline(s, "One trader bets big. The smart money agrees.\nYou get the signal.");
     const blocks = [
-      [0.8, fa.FaBolt, C.p2, "TRIGGER", "An unusually big bet", "A top-500 trader holds 3x+ their usual size, with a high Datadash score. Gives the moment, the price and the size."],
-      [5.15, fa.FaUsers, C.p4, "CONFIRMATION", "Smart money agrees", "60%+ of the money top-500 wallets hold on that market sits on the same side, across 3+ wallets."],
+      [0.8, fa.FaBolt, C.p2, "TRIGGER", "An unusually big bet", "One of Datadash's 1,000 top-scoring positions, from any wallet, 3x+ its usual size. Gives the moment, the price and the size."],
+      [5.15, fa.FaUsers, C.p4, "CONFIRMATION", "Smart money agrees", "The 500 most profitable traders put 60%+ of their money on the same side: $10K+, 3+ wallets."],
     ];
     for (const [x, ic, fill, tag, head, body] of blocks) {
       card(s, x, 2.85, 3.95, 3.75);
@@ -228,8 +228,8 @@ async function main() {
     label(s, "05", "THE RULES");
     headline(s, "Nine filters. Most big bets never make it.");
     const rules = [
-      ["Top 500", "trader by all-time PnL"], ["80+", "Datadash signal score"], ["3x+", "the trader's usual bet"], ["$5K+", "of their money behind it"],
-      ["10–85¢", "price: about +16% or more if right"], ["+3¢ / −10¢", "price vs. their entry"], ["7 days", "since a top trader last bought"], ["1–120", "days until the market ends"], ["60%", "of top-500 money on the same side, 3+ wallets"],
+      ["Top 1,000", "positions by Datadash score, any wallet"], ["80+", "Datadash signal score"], ["3x+", "the trader's usual bet"], ["$5K+", "of their money behind it"],
+      ["10–85¢", "price: about +16% or more if right"], ["+3¢ / −10¢", "price vs. their entry"], ["7 days", "since the trader last bought"], ["1–120", "days until the market ends"], ["60%", "of top-500 money on the same side, $10K+"],
     ];
     rules.forEach(([big, cap], i) => {
       const x = 0.8 + (i % 3) * 3.97, y = 2.15 + Math.floor(i / 3) * 1.25;
@@ -288,7 +288,7 @@ async function main() {
       ["One wallet drove 4 of 13 signals", "One live signal per event and per trader"],
       ["A lone whale can be wrong or hedged", "Smart-money consensus must agree"],
       ["Some traders were already losing badly", "Skip prices 10¢+ below their entry"],
-      ["Old holdings and sells looked like news", "A top trader must have bought within 7 days"],
+      ["Old holdings and sells looked like news", "The trader must have bought within 7 days"],
       ["Subscribers can't verify claims", "Every signal sent is scored once it settles"],
     ];
     T(s, "WE SAW", { x: 0.8, y: 2.15, w: 4, h: 0.3, fontSize: 12, bold: true, color: C.muted, charSpacing: 3 });

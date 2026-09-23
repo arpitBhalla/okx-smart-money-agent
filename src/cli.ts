@@ -40,7 +40,7 @@ async function preview(config: Config) {
     console.log(`${signals.length} signal(s) qualify now\n`);
     for (const signal of signals) {
       console.log(formatSignal(signal, config.signalValidHours));
-      console.log(`  ${explainSignal(signal)}\n`);
+      console.log(`  ${explainSignal(signal, new Date(), config.thresholds.maxTraderRank)}\n`);
     }
   });
 }

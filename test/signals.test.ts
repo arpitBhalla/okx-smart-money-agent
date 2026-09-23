@@ -2,14 +2,18 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   applyConsensus,
+  fetchSignals,
+  recentBuys,
   consensusRows,
   fromSignalRows,
   buildSignals,
   lastBuys,
   settlementDate,
   signalQuery,
+  traderName,
   type ConsensusRow,
 } from "../src/signals.ts";
+import type { Datadash } from "../src/datadash.ts";
 import { row, thresholds, token, trader } from "./fixtures.ts";
 
 const tokens = (...items: ReturnType<typeof token>[]) =>
@@ -233,9 +237,10 @@ test("freshness counts buys only, keeps the latest, and fails loudly on bad data
   assert.throws(() => lastBuys([{ token: { positionId: 1 }, timestamp: "2026-09-22 10:00:00" }]), /without wallet/);
   // A row without its token would otherwise key as "0xa:NaN" and silently fail every signal's freshness.
   assert.throws(() => lastBuys([{ user: { userId: "0xa" }, timestamp: "2026-09-22 10:00:00" }]), /without wallet, position/);
-  assert.throws(
-    () => lastBuys(Array.from({ length: 1000 }, () => buy("0xa", 1, "2026-09-22 10:00:00"))),
-    /full page/,
+  assert.equal(
+    lastBuys(Array.from({ length: 1000 }, () => buy("0xa", 1, "2026-09-22 10:00:00"))).size,
+    1,
+    "a full page is fine here; fetchSignals pages",
   );
 });
 
@@ -299,4 +304,79 @@ test("a row missing the market it belongs to fails loudly instead of matching no
   assert.throws(() => fromSignalRows([noMarket]), /without market id/);
   assert.equal(fromSignalRows([{ ...noMarket, token: { ...noMarket.token, marketId: 10, eventId: 100 } }]).rows[0].marketId, 10,
     "the token's own market id is enough");
+});
+
+test("candidates are the top 1,000 by score then bet size, from any wallet unless a trigger rank is set", () => {
+  const open = signalQuery(thresholds);
+  assert.equal(open.page.limit, 1000);
+  assert.deepEqual(open.orderBy, [
+    { field: "score", direction: "desc" },
+    { field: "tradeSize", direction: "desc" },
+  ]);
+  const fields = (q: ReturnType<typeof signalQuery>) =>
+    (q.filter ?? []).map((f) => ("field" in f ? f.field : ""));
+  assert.ok(!fields(open).includes("userRank"), "no rank filter by default");
+  assert.ok(fields(signalQuery({ ...thresholds, maxTriggerRank: 1000 })).includes("userRank"));
+});
+
+test("consensus needs real money behind it, and addresses stand in for address-like names", () => {
+  const [base] = buildSignals([row()], tokens(token()), traders(trader()), thresholds);
+  const row1 = { marketId: 10, side: "No", smartMoneyPrice: 1, wallets: 3, atRisk: 442 };
+  assert.equal(applyConsensus([base], [row1], thresholds).length, 0, "$442 is not a consensus");
+  assert.equal(applyConsensus([base], [{ ...row1, atRisk: 12_000 }], thresholds).length, 1);
+  const wallet = "0x8b4bca1d794779e66e023d44391b2a86c5ab541b";
+  assert.equal(traderName({ ...trader(), displayName: null, pseudonym: `${wallet}-1769764313952` }, wallet), "0x8b4b…541b");
+  assert.equal(traderName(trader(), wallet), "JnStrtPrdctnMrkts");
+});
+
+test("the smart money must have real money on the side: $10k by default", () => {
+  const [base] = buildSignals([row()], tokens(token()), traders(trader()), thresholds);
+  const agree = { marketId: 10, side: "No", smartMoneyPrice: 0.9, wallets: 5 };
+  assert.equal(applyConsensus([base], [{ ...agree, atRisk: 9_999 }], thresholds).length, 0, "three wallets, pocket change");
+  assert.equal(applyConsensus([base], [{ ...agree, atRisk: 10_000 }], thresholds).length, 1);
+});
+
+test("recent buys are paged until a short page", async () => {
+  const offsets: number[] = [];
+  const datadash: Datadash = {
+    list: async (_path, body) => {
+      const offset = (body as { page: { offset: number } }).page.offset;
+      offsets.push(offset);
+      const size = offset < 2000 ? 1000 : 3;
+      return Array.from({ length: size }, () => ({ user: { userId: "0xa" }, token: { positionId: 1 }, timestamp: "2026-09-22 10:00:00" })) as never;
+    },
+  };
+  assert.equal((await recentBuys(datadash, thresholds, [row()])).length, 2003);
+  assert.deepEqual(offsets, [0, 1000, 2000]);
+
+  const endless: Datadash = { list: async () => Array.from({ length: 1000 }, () => ({})) as never };
+  await assert.rejects(recentBuys(endless, thresholds, [row()]), /more than 10000 recent buys/);
+});
+
+test("freshness is only fetched for candidates the smart money agrees with", async () => {
+  const signalRow = (positionId: number, marketId: number, userId: string) => ({
+    avgEntryPrice: 0.41, pNow: 0.42, tradeSize: 20_000, relSize: 10, score: 100,
+    user: { userId, displayName: userId, rank: 1 },
+    token: { positionId, marketId, eventId: marketId, tokenName: "No", marketQuestion: `Q${marketId}?`, marketSlug: "q", eventSlug: "q", tokenId: "t", marketEndDate: "2026-12-31 12:00:00" },
+    market: { id: marketId },
+    event: { id: marketId },
+  });
+  const asked: string[] = [];
+  let buyFilter: { field: string; value: unknown }[] = [];
+  const datadash: Datadash = {
+    list: async (path, body) => {
+      asked.push(path);
+      if (path === "/api/v1/signals/scores") return [signalRow(1, 10, "0xagreed"), signalRow(2, 20, "0xalone")] as never;
+      // Only market 10 has the smart money behind it.
+      if (path === "/api/v1/smart-money/global")
+        return [{ market: { id: 10 }, side: "No", smartMoneyPrice: 0.9, wallets: 5, atRisk: 50_000 }] as never;
+      buyFilter = (body as { filter: { field: string; value: unknown }[] }).filter;
+      return [{ user: { userId: "0xagreed" }, token: { positionId: 1 }, timestamp: new Date().toISOString().slice(0, 19).replace("T", " ") }] as never;
+    },
+  };
+  const signals = await fetchSignals(datadash, thresholds);
+  assert.deepEqual(asked, ["/api/v1/signals/scores", "/api/v1/smart-money/global", "/api/v1/activity"]);
+  assert.deepEqual(buyFilter.find((f) => f.field === "wallet")?.value, ["0xagreed"], "the rejected candidate's buys are never fetched");
+  assert.deepEqual(signals.map((s) => s.id), ["1"]);
+  assert.equal(signals[0].consensus?.wallets, 5);
 });

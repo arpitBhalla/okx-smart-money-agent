@@ -59,3 +59,11 @@ test("the explanation shows the smart-money consensus behind the signal", () => 
   );
   assert.match(text, /Top-500 money on this side: 81% across 15 wallets \(\$243\.0K\)\./);
 });
+
+test("a lead trader's rank is shown only when it is inside the smart-money cut", () => {
+  const lead = signal().traders[0];
+  assert.match(explainSignal(signal()), /JnStrtPrdctnMrkts \(rank #237\) holds/);
+  const outsider = signal({ traders: [{ ...lead, name: "0x8b4b…541b", rank: 3_207_727 }] });
+  assert.match(explainSignal(outsider), /^0x8b4b…541b holds/);
+  assert.match(explainSignal(signal(), new Date(), 100), /^JnStrtPrdctnMrkts holds/, "the cut follows maxTraderRank");
+});
