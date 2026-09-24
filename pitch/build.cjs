@@ -251,32 +251,34 @@ async function main() {
   {
     const s = slide();
     label(s, "06", "THE EVIDENCE");
-    headline(s, "180 days replayed: a thin edge, mostly sports.");
-    T(s, "+$16.7K", { x: 0.8, y: 2.3, w: 6, h: 1.4, fontSize: 88, bold: true, color: C.green });
-    T(s, "backtest, not a promise: 3,782 settled signals at $100 each, March to September 2026", { x: 0.8, y: 3.75, w: 5.9, h: 0.7, fontSize: 17, color: C.soft, valign: "top" });
-    [["64.9%", "won"], ["+4.4%", "per signal"], ["$2.3K", "max drawdown"]].forEach(([big, cap], i) => {
+    headline(s, "180 days replayed: roughly break-even.");
+    T(s, "Break-even", { x: 0.8, y: 2.45, w: 6, h: 1.2, fontSize: 64, bold: true });
+    T(s, "+2.5% ± 3.6% per signal over 615 settled signals at $100 each, March to September 2026. Backtest, not a promise.", {
+      x: 0.8, y: 3.7, w: 5.9, h: 0.8, fontSize: 16, color: C.soft, valign: "top",
+    });
+    [["66.5%", "won"], ["0.65", "average entry"], ["$2.5K", "max drawdown"]].forEach(([big, cap], i) => {
       const x = 0.8 + i * 2.0;
       T(s, big, { x, y: 4.65, w: 1.9, h: 0.65, fontSize: 30, bold: true });
       T(s, cap, { x, y: 5.3, w: 1.9, h: 0.4, fontSize: 14, color: C.soft });
     });
 
     // Bars drawn as shapes so every app renders them.
-    const bx = 7.35, bw = 5.2, top = 2.35, zeroY = 5.1, perPt = 0.3;
+    const bx = 7.35, bw = 5.2, top = 2.35, zeroY = 4.05, perPt = 0.1;
     card(s, bx - 0.25, top - 0.15, bw + 0.5, 3.75);
-    T(s, "Average return by time to settle", { x: bx, y: top, w: bw, h: 0.35, fontSize: 14, bold: true, color: C.soft });
-    const bars = [["<2h", 6.3], ["2–6h", -0.3], ["6–24h", 1.2], ["1–7d", 2.1], [">7d", 3.1]];
+    T(s, "Average return by entry price", { x: bx, y: top, w: bw, h: 0.35, fontSize: 14, bold: true, color: C.soft });
+    const bars = [["10–30¢", -10.0, 44], ["30–50¢", 2.9, 99], ["50–70¢", -1.3, 203], ["70–85¢", 3.3, 304]];
     s.addShape("line", { x: bx, y: zeroY, w: bw, h: 0, line: { color: C.edge, width: 1 } });
-    bars.forEach(([name, v], i) => {
-      const x = bx + 0.2 + i * 1.0, w = 0.6, h = Math.max(0.04, Math.abs(v) * perPt);
-      const col = v < 0 ? C.red : i === 0 ? C.green : C.p3;
+    bars.forEach(([name, v, n], i) => {
+      const x = bx + 0.35 + i * 1.25, w = 0.7, h = Math.max(0.04, Math.abs(v) * perPt);
+      const col = v < 0 ? C.red : C.p3;
       s.addShape("rect", { x, y: v >= 0 ? zeroY - h : zeroY, w, h, fill: { color: col }, line: { color: col } });
-      T(s, `${v > 0 ? "+" : ""}${v.toFixed(1)}%`, { x: x - 0.2, y: v >= 0 ? zeroY - h - 0.35 : zeroY + 0.08, w: w + 0.4, h: 0.3, fontSize: 13, bold: true, align: "center", color: v < 0 ? C.red : C.white });
-      T(s, name, { x: x - 0.2, y: 5.6, w: w + 0.4, h: 0.3, fontSize: 13, align: "center", color: C.soft });
+      T(s, `${v > 0 ? "+" : ""}${v.toFixed(1)}%`, { x: x - 0.25, y: v >= 0 ? zeroY - h - 0.35 : zeroY + h + 0.05, w: w + 0.5, h: 0.3, fontSize: 13, bold: true, align: "center", color: v < 0 ? C.red : C.white });
+      T(s, `${name}\n${n} signals`, { x: x - 0.3, y: 5.55, w: w + 0.6, h: 0.5, fontSize: 12, align: "center", color: C.soft });
     });
-    T(s, "Honest limits: wallet ranks are today's (look-ahead bias) · 93% sports, most settling within hours · the score and smart-money check can't be replayed · signals taking a day or more: +2.4% ± 2.9%. The live track record is the real test.", {
+    T(s, "What it can't test: the Datadash score and the smart-money check only exist for today's holdings, and wallet ranks are today's. So every live signal is scored as its market settles: the track record is the real test.", {
       x: 0.8, y: 6.15, w: 11.75, h: 0.8, fontSize: 14, color: C.soft, valign: "top",
     });
-    s.addNotes("pnpm backtest. As delivered with caps: 3,782 resolved, 64.9% hit rate, +4.4% ± 1.4% per signal, max drawdown $2,327. Before caps: 6,264 resolved, +2.1% ± 1.1%. Entries at 0.10 to 0.30 lost 20.8%.");
+    s.addNotes("pnpm backtest, run 2026-09-23 over 180 days, YES/NO markets only. As delivered with caps: 615 resolved, 66.5% hit rate at average entry 0.65, +2.5% ± 3.6% per signal, +$1,548 at $100 each, max drawdown $2,514. Before caps: 681 resolved, +1.5% ± 3.4%. An earlier run that included team-name sports markets looked stronger (+4.4% over 3,782 signals), but OKX's YES/NO format can't carry those. The live filters that matter most, the Datadash score and the smart-money consensus, can't be replayed.");
   }
 
   // 8. Trust
@@ -363,7 +365,7 @@ async function main() {
     headline(s, "Where this grows.");
     const cols = [
       ["NOW", C.p2, ["Ready to list on OKX.AI (review pending)", "Trigger + smart-money confirmation", "Backtest done; track record starts with the first signal"]],
-      ["NEXT", C.p4, ["Pro tier on the same identity", "Category filters, starting with in-play sports", "Thresholds tuned on the live record"]],
+      ["NEXT", C.p4, ["Pro tier on the same identity", "Category filters for subscribers", "Thresholds tuned on the live record"]],
       ["LATER", C.p6, ["Every prediction market Datadash indexes", "License the Datadash score as an API", "Signals for other agent marketplaces"]],
     ];
     cols.forEach(([name, col, items], i) => {
@@ -375,7 +377,7 @@ async function main() {
         T(s, t, { x: x + 0.3, y: 2.95 + j * 1.2, w: 3.2, h: 1.0, fontSize: 16, valign: "middle" });
       });
     });
-    s.addNotes("The backtest showed most historical signals were sports bets settling within hours; a category filter is the first product change to test.");
+    s.addNotes("Next is tuning on the live track record: the backtest can't replay the Datadash score or the smart-money check, so real results decide the thresholds.");
   }
 
   // 12. Close
