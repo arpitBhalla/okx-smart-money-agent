@@ -309,7 +309,7 @@ async function main() {
     label(s, "08", "BUSINESS MODEL");
     headline(s, "Free data pulls agents in. Signals pay.");
     const tiers = [
-      ["FREE", "0", "via A2MCP", ["Free Datadash tools any agent can call", "smart-money-edge, market-read", "Try the data before paying"], false, ""],
+      ["FREE", "0", "via A2MCP", ["Datadash's MCP tools, any agent can call", "Smart money, scores, wallets", "Try the data before paying"], false, ""],
       ["STANDARD", "5 USDT", "a month, 3-day trial", ["Scanned every 2 minutes, signals as they qualify", "Copy-trading through your own agent", "Track record of every signal"], true, "THIS AGENT"],
       ["PRO", "25 USDT", "a month", ["30-second scans, no cap", "Custom trader lists", "Category filters"], false, "PROPOSED"],
     ];

@@ -150,8 +150,11 @@ before they pay.
    `agent pre-check --role asp` consent step.
 2. **Register the agent**, with the avatar, the profile in `listing/agent.json` and the services in
    `listing/services.json`. Ask the agent to "register as an ASP" and give it those files; the okx-ai skill
-   walks the flow and runs `onchainos agent create`. Add the free A2MCP services (`/smart-money-edge`,
-   `/market-read`) from the `okx-a2mcp` Worker to the same identity, so subscribers can try the data first.
+   walks the flow and runs `onchainos agent create`. `listing/services.json` has two services: the A2A
+   subscription, and a free A2MCP service so agents can try the data before subscribing. The A2MCP one needs no
+   agent session: OKX's CLI calls the endpoint directly. Datadash's MCP requires an API key, so the endpoint is a
+   small Vercel proxy (`mcp-proxy/`) that adds our key and exposes only the read-only tools. Deploy it first (see
+   `mcp-proxy/README.md`) and put its URL in the A2MCP entry.
    If the identity already exists, add this service with `onchainos agent update` instead.
 3. **Submit for listing review.** OKX reviews within 48 hours and emails the result.
 4. **Start delivery** on the same server:
@@ -171,7 +174,7 @@ before they pay.
 - **Tiers (proposal, not listed yet).**
   | Tier     | Price            | What you get                                                                 |
   | -------- | ---------------- | ---------------------------------------------------------------------------- |
-  | Free     | 0, via A2MCP     | `/smart-money-edge` and `/market-read` from the `okx-a2mcp` Worker: try the data first |
+  | Free     | 0, via A2MCP     | Datadash's MCP tools through our proxy (`mcp-proxy/`): smart-money consensus, signal scores, wallet profiles |
   | Standard | 5 USDT a month   | This service: live signals, copy-trading through the subscriber's own agent  |
   | Pro      | 25 USDT a month  | 30-second scans, every qualifying signal (no per-round cap), a custom trader list, category filters |
   Pro is a second service on the same identity, added with `onchainos agent update` once Standard has a track record.
@@ -196,6 +199,7 @@ src/cli.ts         preview / baseline / round / run / track-record / backtest
 listing/           OKX.AI identity and service listing
 skill/SKILL.md     Instructions for the provider's agent session
 deploy/            systemd unit for the resident program
+mcp-proxy/         Vercel function: the free A2MCP endpoint, a key-holding read-only proxy to Datadash's MCP
 ```
 
 Signals are information, not financial advice. Copy-trading is off unless each subscriber turns it on.

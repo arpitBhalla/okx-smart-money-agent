@@ -1,0 +1,11 @@
+{
+  "name": "datadash-mcp-proxy",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0"
+  }
+}
