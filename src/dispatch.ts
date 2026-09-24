@@ -76,6 +76,8 @@ export function admitSignals(
       orderPrice: signal.orderPrice,
       settlement: signal.settlement,
       url: marketUrl(signal),
+      marketSlug: signal.slug,
+      tokenId: signal.tokenId,
       text,
       createdAt,
     });

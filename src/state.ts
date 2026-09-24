@@ -15,6 +15,9 @@ export type HistoryItem = {
   orderPrice: number;
   settlement: string | null;
   url: string;
+  /** Polymarket's market slug and outcome token id, so an API caller can find the exact market. Absent on old entries. */
+  marketSlug?: string;
+  tokenId?: string;
   text: string;
   createdAt: string;
 };
