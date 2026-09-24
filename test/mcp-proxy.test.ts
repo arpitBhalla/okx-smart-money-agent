@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { cleanDescription, cleanSchema, filterToolList, rateLimited, rejectMessage, rewriteMessages } from "../mcp-proxy/api/mcp.ts";
+import {
+  adapterFor,
+  cleanDescription,
+  cleanSchema,
+  createPaywall,
+  filterToolList,
+  hasRpcError,
+  needsPayment,
+  rateLimited,
+  rejectMessage,
+  rewriteMessages,
+} from "../mcp-proxy/api/mcp.ts";
 
 test("only read-only tools and the MCP handshake get through", () => {
   assert.equal(rejectMessage({ method: "initialize", id: 1 }), null);
@@ -67,4 +78,50 @@ test("the schema is cleaned inside the JSON text of a tool result, and nothing e
 test("tool names are not mistaken for storage", () => {
   assert.equal(cleanDescription("Run a query (call get_schema first)."), "Run a query (call get_schema first).");
   assert.equal(cleanDescription("Price (p_now), see get_schema"), "Price, see get_schema");
+});
+
+test("only query calls are paid; the handshake, the tool list and get_schema stay free", () => {
+  assert.equal(needsPayment({ method: "tools/call", params: { name: "query_table" } }), true);
+  assert.equal(needsPayment({ method: "tools/call", params: { name: "query_lookup" } }), true);
+  assert.equal(needsPayment({ method: "tools/call", params: { name: "get_schema" } }), false);
+  assert.equal(needsPayment({ method: "tools/list" }), false);
+  assert.equal(needsPayment([{ method: "initialize" }, { method: "tools/call", params: { name: "query_table" } }]), true);
+});
+
+test("a failed query is recognised, so it is never settled", () => {
+  const ok = JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } });
+  assert.equal(hasRpcError(ok, "application/json"), false);
+  assert.equal(hasRpcError(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -1 } }), "application/json"), true);
+  assert.equal(hasRpcError(`event: message\ndata: ${JSON.stringify({ id: 1, result: { isError: true } })}\n\n`, "text/event-stream"), true);
+  assert.equal(hasRpcError("not json", "application/json"), true);
+});
+
+test("an unpaid query gets an x402 challenge for X Layer; free calls pass without one", async () => {
+  const facilitator = {
+    verify: async () => ({ isValid: false }),
+    settle: async () => ({ success: false }),
+    getSupported: async () => ({ kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:196" }], extensions: [], signers: {} }),
+  };
+  const payTo = "0x00fdd6dd4d5ea43c2560dc46b295f0e0fac7292c";
+  const paywall = createPaywall(facilitator as never, { payTo, price: "$0.01", network: "eip155:196" });
+  await paywall.initialize();
+  const request = (body: object) =>
+    new Request("https://okx.datadash.vercel.app/api/mcp", { method: "POST", headers: { accept: "application/json, text/event-stream" }, body: JSON.stringify(body) });
+  const context = (body: object) => ({ adapter: adapterFor(request(body), body), path: "/api/mcp", method: "POST" });
+
+  const query = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "query_table", arguments: {} } };
+  const unpaid = await paywall.processHTTPRequest(context(query));
+  assert.equal(unpaid.type, "payment-error");
+  if (unpaid.type !== "payment-error") return;
+  assert.equal(unpaid.response.status, 402);
+  const challenge = unpaid.response.headers["PAYMENT-REQUIRED"] ?? unpaid.response.headers["payment-required"];
+  assert.ok(challenge, "the 402 carries a PAYMENT-REQUIRED header");
+  const decoded = JSON.parse(Buffer.from(challenge, "base64").toString("utf8"));
+  const offer = decoded.accepts[0];
+  assert.equal(offer.network, "eip155:196");
+  assert.equal(offer.payTo.toLowerCase(), payTo);
+  assert.ok(Number(offer.amount ?? offer.maxAmountRequired) > 0);
+
+  const schema = { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "get_schema", arguments: {} } };
+  assert.equal((await paywall.processHTTPRequest(context(schema))).type, "no-payment-required");
 });

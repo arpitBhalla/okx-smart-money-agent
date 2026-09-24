@@ -7,7 +7,19 @@
  * size cap, and a per-caller rate limit.
  */
 
+import { OKXFacilitatorClient } from "@okxweb3/x402-core";
+import {
+  x402HTTPResourceServer,
+  x402ResourceServer,
+  type FacilitatorClient,
+  type HTTPAdapter,
+  type HTTPRequestContext,
+  type HTTPResponseInstructions,
+} from "@okxweb3/x402-core/server";
+import { ExactEvmScheme } from "@okxweb3/x402-evm/exact/server";
+
 const UPSTREAM = process.env.DATADASH_MCP_URL || "https://api.datadash.xyz/mcp";
+const ROUTE = "POST /api/mcp";
 
 /** The read-only tools. Everything cohort-related stays private to our key's account. */
 export const ALLOWED_TOOLS = new Set(["get_schema", "query_table", "query_lookup"]);
@@ -21,6 +33,12 @@ const ALLOWED_METHODS = new Set([
   "resources/read",
   "resources/templates/list",
 ]);
+
+/**
+ * The tools a caller pays for, one payment per call. The handshake, tools/list and get_schema stay free: an agent
+ * has to be able to connect and learn the tables before it can decide to buy a query.
+ */
+export const PAID_TOOLS = new Set(["query_table", "query_lookup"]);
 
 const MAX_BODY_BYTES = 64 * 1024;
 const RATE_LIMIT = { requests: 60, windowMs: 60_000 };
@@ -119,6 +137,99 @@ export function rewriteMessages(body: string, contentType: string, edit: (messag
     .join("\n");
 }
 
+/** Whether a request carries a paid tool call. */
+export function needsPayment(parsed: unknown): boolean {
+  const messages = (Array.isArray(parsed) ? parsed : [parsed]) as JsonRpc[];
+  return messages.some((m) => m?.method === "tools/call" && PAID_TOOLS.has(String(m.params?.name)));
+}
+
+/**
+ * Whether an upstream answer failed, as a JSON-RPC error or an MCP tool error (`result.isError`). A failed query
+ * is not settled, so the caller is never charged for it.
+ */
+export function hasRpcError(body: string, contentType: string): boolean {
+  let failed = false;
+  try {
+    rewriteMessages(body, contentType, (message) => {
+      const m = message as { error?: unknown; result?: { isError?: boolean } };
+      if (m?.error || m?.result?.isError === true) failed = true;
+      return message;
+    });
+  } catch {
+    return true;
+  }
+  return failed;
+}
+
+/**
+ * The x402 paywall over OKX's facilitator: a 402 challenge for an unpaid query, verification of a paid one, and
+ * settlement on X Layer once the answer is good. Payment is waived for everything that isn't a paid tool call.
+ */
+export function createPaywall(
+  facilitator: FacilitatorClient,
+  opts: { payTo: string; price: string; network: string },
+): x402HTTPResourceServer {
+  const network = opts.network as `${string}:${string}`;
+  const resource = new x402ResourceServer(facilitator);
+  resource.register(network, new ExactEvmScheme());
+  const paywall = new x402HTTPResourceServer(resource, {
+    [ROUTE]: {
+      accepts: [{ scheme: "exact", network, payTo: opts.payTo, price: opts.price }],
+      description: "Datadash Polymarket smart-money data: one query_table or query_lookup call",
+      mimeType: "application/json",
+    },
+  });
+  paywall.onProtectedRequest(async (context) =>
+    needsPayment(context.adapter.getBody?.()) ? undefined : { grantAccess: true },
+  );
+  return paywall;
+}
+
+/**
+ * The live paywall, or null when payments aren't configured: then every tool is free, as before. Built once per
+ * instance; a failed start (the facilitator unreachable) is retried on the next request.
+ */
+let paywall: Promise<x402HTTPResourceServer | null> | undefined;
+function livePaywall(): Promise<x402HTTPResourceServer | null> {
+  if (paywall) return paywall;
+  const { OKX_API_KEY, OKX_SECRET_KEY, OKX_PASSPHRASE, PAY_TO_ADDRESS } = process.env;
+  if (!OKX_API_KEY || !OKX_SECRET_KEY || !OKX_PASSPHRASE || !PAY_TO_ADDRESS) {
+    console.log("payments off: set OKX_API_KEY, OKX_SECRET_KEY, OKX_PASSPHRASE and PAY_TO_ADDRESS to charge per query");
+    return (paywall = Promise.resolve(null));
+  }
+  const server = createPaywall(
+    new OKXFacilitatorClient({ apiKey: OKX_API_KEY, secretKey: OKX_SECRET_KEY, passphrase: OKX_PASSPHRASE, syncSettle: true }),
+    { payTo: PAY_TO_ADDRESS, price: process.env.X402_PRICE || "$0.01", network: process.env.X402_NETWORK || "eip155:196" },
+  );
+  paywall = server.initialize().then(
+    () => server,
+    (error: Error) => {
+      paywall = undefined;
+      throw error;
+    },
+  );
+  return paywall;
+}
+
+export function adapterFor(request: Request, body: unknown): HTTPAdapter {
+  const url = new URL(request.url);
+  return {
+    getHeader: (name) => request.headers.get(name) ?? undefined,
+    getMethod: () => request.method,
+    getPath: () => url.pathname,
+    getUrl: () => request.url,
+    getAcceptHeader: () => request.headers.get("accept") ?? "",
+    getUserAgent: () => request.headers.get("user-agent") ?? "",
+    getBody: () => body,
+  };
+}
+
+const fromInstructions = ({ status, headers, body }: HTTPResponseInstructions) =>
+  new Response(body === undefined ? null : typeof body === "string" ? body : JSON.stringify(body), {
+    status,
+    headers,
+  });
+
 /**
  * Best-effort per-caller limit, per function instance. Fluid Compute shares an instance between concurrent
  * requests, so this catches bursts; a Vercel Firewall rate-limit rule is the global backstop.
@@ -161,6 +272,24 @@ export async function POST(request: Request): Promise<Response> {
     }
   }
 
+  // A paid query must carry a valid payment before it reaches Datadash.
+  let gate: x402HTTPResourceServer | null = null;
+  let context: HTTPRequestContext | undefined;
+  let verified: Awaited<ReturnType<x402HTTPResourceServer["processHTTPRequest"]>> | undefined;
+  if (needsPayment(parsed)) {
+    try {
+      gate = await livePaywall();
+    } catch (error) {
+      console.error(`payments unavailable: ${(error as Error).message}`);
+      return json(503, rpcError(messages[0]?.id, -32603, "payments are temporarily unavailable; try again shortly"));
+    }
+    if (gate) {
+      context = { adapter: adapterFor(request, parsed), path: new URL(request.url).pathname, method: "POST" };
+      verified = await gate.processHTTPRequest(context);
+      if (verified.type === "payment-error") return fromInstructions(verified.response);
+    }
+  }
+
   const forward: Record<string, string> = {
     "content-type": "application/json",
     accept: request.headers.get("accept") || "application/json, text/event-stream",
@@ -188,6 +317,27 @@ export async function POST(request: Request): Promise<Response> {
   for (const name of ["content-type", "mcp-session-id", "cache-control"]) {
     const value = upstream.headers.get(name);
     if (value) headers[name] = value;
+  }
+
+  // A paid query settles only after Datadash answered it well; a failed one is returned without charging.
+  if (gate && context && verified?.type === "payment-verified") {
+    const body = await upstream.text();
+    if (!upstream.ok || hasRpcError(body, headers["content-type"] ?? "")) {
+      console.log(`not settled: upstream ${upstream.status} or tool error for ${caller}`);
+      return new Response(body, { status: upstream.status, headers });
+    }
+    const settled = await gate.processSettlement(
+      verified.paymentPayload,
+      verified.paymentRequirements,
+      verified.declaredExtensions,
+      { request: context, responseBody: Buffer.from(body) },
+    );
+    if (!settled.success) {
+      console.error(`settlement failed for ${caller}: ${settled.errorReason}`);
+      return fromInstructions(settled.response);
+    }
+    console.log(`settled ${settled.transaction ?? ""} for ${caller}`);
+    return new Response(body, { status: upstream.status, headers: { ...headers, ...settled.headers } });
   }
 
   // Answers that describe the data get edited: tools/list loses the private tools, and the schema (as a tool

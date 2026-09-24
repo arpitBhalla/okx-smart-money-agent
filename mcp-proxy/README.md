@@ -15,6 +15,28 @@ In exchange it keeps the public surface small:
 - 60 requests a minute per caller, per function instance. Add a Vercel Firewall rate-limit rule on `/api/mcp` for a
   global limit, since every call counts against our key.
 
+## Paid queries (x402 on X Layer)
+
+Each `query_table` or `query_lookup` call can cost a small fee, paid through OKX's x402 payment SDK
+(`@okxweb3/x402-core`, `@okxweb3/x402-evm`). Connecting, `tools/list` and `get_schema` stay free, so an agent can
+discover the data before paying.
+
+- An unpaid query gets HTTP 402 with a `PAYMENT-REQUIRED` challenge: USD₮0 on X Layer, to `PAY_TO_ADDRESS`.
+- The buyer's OKX agent pays from its Agentic Wallet and repeats the call with the signed payment.
+- The proxy verifies the payment with OKX's facilitator, forwards the query, and settles on X Layer only if
+  Datadash answered it without an error. A failed query is never charged.
+
+Payments switch on when all four of these are set in Vercel; without them every tool is free, as before:
+
+| Variable | Value |
+| --- | --- |
+| `OKX_API_KEY`, `OKX_SECRET_KEY`, `OKX_PASSPHRASE` | OKX Developer Portal API credentials |
+| `PAY_TO_ADDRESS` | Wallet that receives payments, e.g. the agent's wallet |
+| `X402_PRICE` (optional) | Price per query, default `$0.01` |
+| `X402_NETWORK` (optional) | `eip155:196` X Layer mainnet (default), `eip155:1952` testnet |
+
+Test on the testnet first. When paid mode is live, update the A2MCP listing's `fee` to match the price.
+
 ## Deploy
 
 ```bash
